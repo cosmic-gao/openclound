@@ -10,10 +10,15 @@ def _env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:  # type: ignore[no-
     """每个用例使用独立的临时工作区与占位密钥,避免网络与污染 cwd。"""
     # 切到干净的临时目录,确保不受仓库内开发者本地 .env 影响(测试可重现)。
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("DEEPAGENT_WORKSPACE", str(tmp_path / "ws"))
-    monkeypatch.setenv("DEEPAGENT_API_KEY", "sk-placeholder")
-    # 清掉可能干扰默认值的环境变量
-    for var in ("DEEPAGENT_ENABLE_SHELL", "DEEPAGENT_ENABLE_HITL", "DEEPAGENT_MODEL"):
+    monkeypatch.setenv("AGENT_WORKSPACE", str(tmp_path / "ws"))
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-placeholder")
+    # 清掉可能干扰默认值的环境变量(OPENAI_BASE_URL 清掉以测内置默认网关)。
+    for var in (
+        "AGENT_ENABLE_SHELL",
+        "AGENT_ENABLE_HITL",
+        "AGENT_MODEL",
+        "OPENAI_BASE_URL",
+    ):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -56,9 +61,9 @@ def test_settings_defaults() -> None:
 def test_settings_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     from deepagent import get_settings
 
-    monkeypatch.setenv("DEEPAGENT_MODEL", "gpt-5.1")
-    monkeypatch.setenv("DEEPAGENT_ENABLE_SHELL", "0")
-    monkeypatch.setenv("DEEPAGENT_TEMPERATURE", "0.7")
+    monkeypatch.setenv("AGENT_MODEL", "gpt-5.1")
+    monkeypatch.setenv("AGENT_ENABLE_SHELL", "0")
+    monkeypatch.setenv("AGENT_TEMPERATURE", "0.7")
     s = get_settings()
     assert s.model == "gpt-5.1"
     assert s.enable_shell is False
@@ -66,19 +71,25 @@ def test_settings_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_settings_reads_dotenv(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:  # type: ignore[no-untyped-def]
-    """get_settings() 应加载 cwd 下的 .env(fixture 已切到 tmp_path)。"""
-    import os
-
+    """get_settings() 经 pydantic-settings 读取 cwd 下的 .env。"""
     from deepagent import get_settings
 
-    monkeypatch.delenv("DEEPAGENT_FALLBACK_MODEL", raising=False)
-    env_file = tmp_path / ".env"
-    env_file.write_text("DEEPAGENT_FALLBACK_MODEL=backup\n", encoding="utf-8")
-    try:
-        assert get_settings().fallback_model == "backup"
-    finally:
-        # load_dotenv 直接写 os.environ,monkeypatch 不追踪,手动清理避免泄漏。
-        os.environ.pop("DEEPAGENT_FALLBACK_MODEL", None)
+    monkeypatch.delenv("AGENT_FALLBACK_MODEL", raising=False)
+    (tmp_path / ".env").write_text("AGENT_FALLBACK_MODEL=backup\n", encoding="utf-8")
+    assert get_settings().fallback_model == "backup"
+
+
+def test_settings_reads_openai_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """连接走标准 OPENAI_BASE_URL / OPENAI_API_KEY(可指向 MiniMax 等任意端点)。"""
+    from deepagent import get_settings
+
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://api.minimaxi.com/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mm")
+    s = get_settings()
+    assert s.base_url == "https://api.minimaxi.com/v1"
+    assert s.api_key == "sk-test-mm"
 
 
 # ————————————————————————— 模型 —————————————————————————
@@ -94,6 +105,18 @@ def test_build_model_targets_gateway() -> None:
     assert isinstance(model, ChatOpenAI)
     assert model.model_name == s.model
     assert str(model.openai_api_base) == s.base_url
+
+
+def test_build_model_backfills_openai_env() -> None:
+    """build_model 应把网关回填到 OPENAI_*,使 embeddings 等也走同一网关。"""
+    import os
+
+    from deepagent import build_model, get_settings
+
+    s = get_settings()
+    build_model(s)
+    assert os.environ.get("OPENAI_API_KEY") == s.api_key
+    assert os.environ.get("OPENAI_BASE_URL") == s.base_url
 
 
 # ————————————————————————— 中间件 —————————————————————————
@@ -113,25 +136,25 @@ def test_build_middleware_default() -> None:
 def test_build_middleware_respects_flags(monkeypatch: pytest.MonkeyPatch) -> None:
     from deepagent import build_middleware, get_settings
 
-    monkeypatch.setenv("DEEPAGENT_PII_STRATEGY", "redact")
-    monkeypatch.setenv("DEEPAGENT_ENABLE_FILE_SEARCH", "1")
+    monkeypatch.setenv("AGENT_PII_STRATEGY", "redact")
+    monkeypatch.setenv("AGENT_ENABLE_FILE_SEARCH", "1")
     mw = build_middleware(get_settings(), workspace_root=".")
     names = [type(m).__name__ for m in mw]
     assert "PIIMiddleware" in names  # 启用后每种 PII 类型一条
     assert "FilesystemFileSearchMiddleware" in names
 
 
-def test_high_risk_interrupts() -> None:
-    from deepagent import get_settings, high_risk_interrupts
+def test_interrupts() -> None:
+    from deepagent import get_settings, interrupts
     from deepagent.config import get_settings as gs
 
-    assert high_risk_interrupts(get_settings()) == {}  # hitl off
+    assert interrupts(get_settings()) == {}  # hitl off
 
     s = gs()
     s.enable_hitl = True
-    interrupts = high_risk_interrupts(s)
-    assert interrupts["write_file"] is True
-    assert interrupts["execute"] is True  # shell 工具名为 execute
+    interrupt_on = interrupts(s)
+    assert interrupt_on["write_file"] is True
+    assert interrupt_on["execute"] is True  # shell 工具名为 execute
 
 
 # ————————————————————————— 工作区 / skills / memory —————————————————————————
@@ -139,9 +162,9 @@ def test_high_risk_interrupts() -> None:
 
 def test_workspace_initializes_templates() -> None:
     from deepagent import get_settings
-    from deepagent.workspace import ensure_workspace, has_skills, memory_files
+    from deepagent.workspace import has_skills, init_workspace, memory_files
 
-    root = ensure_workspace(get_settings().workspace)
+    root = init_workspace(get_settings().workspace)
     assert root.is_dir()
     assert has_skills(root)
     assert memory_files(root) == ["memories/AGENTS.md"]
@@ -149,15 +172,7 @@ def test_workspace_initializes_templates() -> None:
     assert (root / "skills" / "deep-research" / "SKILL.md").is_file()
 
 
-# ————————————————————————— 工具 / MCP —————————————————————————
-
-
-def test_default_tools() -> None:
-    from deepagent import default_tools
-
-    tools = default_tools()
-    names = {t.name for t in tools}
-    assert {"word_count", "current_time"} <= names
+# ————————————————————————— MCP —————————————————————————
 
 
 def test_load_mcp_tools_empty() -> None:
@@ -180,7 +195,7 @@ def test_build_agent_constructs() -> None:
 
 
 def test_build_agent_exposes_shell_and_file_tools() -> None:
-    """启用 shell 时应有跨平台 execute 工具 + 文件工具 + 自定义工具。"""
+    """启用 shell 时应有跨平台 execute 工具 + 文件工具。"""
     from deepagent import build_agent
 
     agent = build_agent()
@@ -191,8 +206,6 @@ def test_build_agent_exposes_shell_and_file_tools() -> None:
     # execute(LocalShellBackend 提供的跨平台 shell)与文件工具都在
     assert "execute" in registered
     assert {"read_file", "write_file", "edit_file", "glob", "grep"} <= registered
-    # 自定义示例工具被合并
-    assert "word_count" in registered
 
 
 def test_backend_selection_by_shell_flag(tmp_path) -> None:  # type: ignore[no-untyped-def]
@@ -217,6 +230,32 @@ def test_build_agent_with_managed_checkpointer() -> None:
 
     agent = build_agent(managed_checkpointer=True)
     assert agent.checkpointer is not None
+
+
+# ————————————————————————— Aegra 部署 —————————————————————————
+
+
+def test_platform_managed_omits_checkpointer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """platform_managed=True 时不带 checkpointer(交给 Aegra),即便开了 HITL。"""
+    from deepagent import build_agent
+
+    monkeypatch.setenv("AGENT_ENABLE_HITL", "1")
+    # 非平台模式:HITL 会自动补一个进程内 checkpointer。
+    assert build_agent().checkpointer is not None
+    # 平台模式:持久化交给 Aegra,图本身不带 checkpointer / store。
+    platform_agent = build_agent(platform_managed=True)
+    assert platform_agent.checkpointer is None
+    assert platform_agent.store is None
+
+
+def test_aegra_graph_factory() -> None:
+    """deepagent.graph:graph 应是 Aegra 可加载的 0 参工厂,产出无 checkpointer 的图。"""
+    from deepagent.graph import graph
+
+    g = graph()
+    assert hasattr(g, "invoke")
+    assert hasattr(g, "astream")
+    assert g.checkpointer is None  # Aegra 注入 Postgres 持久化
 
 
 # ————————————————————————— CLI 纯函数 —————————————————————————

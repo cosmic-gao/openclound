@@ -6,7 +6,7 @@
     deepagent "refactor foo.py"    # 单次任务后退出
     deepagent --hitl               # 高危工具(写文件 / shell)执行前人工确认
     deepagent --mcp servers.json   # 额外挂载 MCP 工具
-    deepagent --model claude-sonnet-4-6 --workspace ./.deepagent
+    deepagent --model claude-sonnet-4-6 --workspace ./.agent
 
 REPL 内命令:``/exit`` 退出 · ``/reset`` 开新会话 · ``/help`` 帮助。
 """
@@ -186,15 +186,15 @@ async def _converse(agent: Any, user_input: str, config: dict[str, Any]) -> None
 
 
 def _apply_env(args: argparse.Namespace) -> None:
-    """把命令行开关写入 ``DEEPAGENT_*`` 环境变量(须在 get_settings 之前)。"""
+    """把命令行开关写入 ``AGENT_*`` 环境变量(须在 get_settings 之前)。"""
     if args.model:
-        os.environ["DEEPAGENT_MODEL"] = args.model
+        os.environ["AGENT_MODEL"] = args.model
     if args.workspace:
-        os.environ["DEEPAGENT_WORKSPACE"] = args.workspace
+        os.environ["AGENT_WORKSPACE"] = args.workspace
     if args.no_shell:
-        os.environ["DEEPAGENT_ENABLE_SHELL"] = "0"
+        os.environ["AGENT_ENABLE_SHELL"] = "0"
     if args.hitl:
-        os.environ["DEEPAGENT_ENABLE_HITL"] = "1"
+        os.environ["AGENT_ENABLE_HITL"] = "1"
 
 
 def _load_mcp(path: str | None) -> dict[str, dict[str, Any]] | None:
@@ -219,9 +219,9 @@ async def _build(args: argparse.Namespace) -> Any:
 async def _amain(args: argparse.Namespace) -> int:
     _apply_env(args)
 
-    if not (os.getenv("DEEPAGENT_API_KEY") or os.getenv("OPENAI_API_KEY")):
+    if not os.getenv("OPENAI_API_KEY"):
         print(
-            "\033[33mwarning:\033[0m DEEPAGENT_API_KEY / OPENAI_API_KEY not set; "
+            "\033[33mwarning:\033[0m OPENAI_API_KEY not set; "
             "connecting to the gateway with a placeholder key may fail.",
             file=sys.stderr,
         )
@@ -285,9 +285,9 @@ def main(argv: list[str] | None = None) -> int:
         "prompt", nargs="?", help="one-shot task; omit to start the interactive REPL"
     )
     parser.add_argument(
-        "--model", help="override the model name (default: DEEPAGENT_MODEL)"
+        "--model", help="override the model name (default: AGENT_MODEL)"
     )
-    parser.add_argument("--workspace", help="workspace directory (default: .deepagent)")
+    parser.add_argument("--workspace", help="workspace directory (default: .agent)")
     parser.add_argument("--mcp", help="path to an MCP servers JSON config file")
     parser.add_argument(
         "--thread", default="cli", help="session thread_id (for multi-turn memory)"

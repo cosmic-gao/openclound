@@ -1,7 +1,7 @@
 """深度智能体构建入口:组装 model / tools / skills / memory / middleware / subagents。
 
-- **模型**:经 litellm 网关接入(见 :mod:`deepagent.model`)。
-- **工具**:内置工具(规划 / 文件系统 / 子代理) + 示例自定义工具 + 调用方工具
+- **模型**:经 OpenAI 兼容端点接入(见 :mod:`deepagent.model`)。
+- **工具**:deepagents 内置工具(规划 / 文件系统 / 子代理 / shell) + 调用方工具
   + (异步入口下)MCP 工具。
 - **能力 / 安全**:shell、文件搜索、重试、调用上限、上下文管理、PII、HITL
   (见 :mod:`deepagent.middleware`)。
@@ -15,14 +15,14 @@ from typing import TYPE_CHECKING, Any
 
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend, LocalShellBackend
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.store.memory import InMemoryStore
 
 from deepagent.config import Settings, get_settings
 from deepagent.mcp import load_mcp_tools
-from deepagent.memory import build_checkpointer, build_store
-from deepagent.middleware import build_middleware, high_risk_interrupts
+from deepagent.middleware import build_middleware, interrupts
 from deepagent.model import build_model
-from deepagent.tools import default_tools
-from deepagent.workspace import ensure_workspace, has_skills, memory_files
+from deepagent.workspace import has_skills, init_workspace, memory_files
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -72,16 +72,17 @@ def build_agent(
     managed_checkpointer: bool = False,
     checkpointer: BaseCheckpointSaver[Any] | None = None,
     store: BaseStore | None = None,
+    platform_managed: bool = False,
     extra_middleware: Sequence[AgentMiddleware] | None = None,
     name: str = DEFAULT_AGENT_NAME,
 ) -> Any:
     """构建一个集成全部能力的 deep agent(同步)。
 
-    使用 litellm 网关模型、内置 + 自定义工具、skills 与长短期记忆。需要 MCP 工具
-    时请改用 :func:`build_async_agent`。
+    使用 OpenAI 兼容端点模型、deepagents 内置工具 + 调用方工具、skills 与记忆。
+    需要 MCP 工具时请改用 :func:`build_async_agent`。
 
     Args:
-        tools: 额外的自定义工具(与内置工具、示例工具合并)。
+        tools: 额外的自定义工具(与 deepagents 内置工具合并)。
         subagents: 子代理配置列表(经 ``task`` 工具调用)。
         system_prompt: 追加到 deepagents 内置系统提示之前的指令。
         settings: 运行配置;为空则调用 :func:`~deepagent.config.get_settings`。
@@ -92,6 +93,10 @@ def build_agent(
             (短期 + 长期记忆)。也可通过 ``checkpointer`` / ``store`` 显式传入。
         checkpointer: 显式短期记忆;优先于 ``managed_checkpointer`` 自动创建的实例。
         store: 显式长期记忆。
+        platform_managed: ``True`` 时由部署平台(如 Aegra / LangGraph Platform)在
+            运行时注入 Postgres 持久层,故**不**附带任何 checkpointer / store,也不为
+            HITL 自动补 checkpointer(平台的 checkpointer 即可支撑中断 / 恢复)。
+            用于 :mod:`deepagent.graph` 暴露给 Aegra 的图工厂。
         extra_middleware: 追加到能力 / 安全中间件之后的自定义中间件。
         name: agent 名称。
 
@@ -99,12 +104,10 @@ def build_agent(
         已编译的 LangGraph 图,支持 ``invoke`` / ``ainvoke`` / ``stream`` 等接口。
     """
     settings = settings or get_settings()
-    root = ensure_workspace(settings.workspace)
+    root = init_workspace(settings.workspace)
 
-    the_model = model if model is not None else build_model(settings)
+    llm = model if model is not None else build_model(settings)
     backend = _build_backend(settings, root)
-
-    all_tools: list[BaseTool] = [*default_tools(), *(tools or [])]
 
     skills = ["skills"] if enable_skills and has_skills(root) else None
     memory = memory_files(root) if enable_memory else None
@@ -113,25 +116,30 @@ def build_agent(
     if extra_middleware:
         middleware.extend(extra_middleware)
 
-    interrupts = high_risk_interrupts(settings)
+    interrupt_on = interrupts(settings)
 
-    if managed_checkpointer:
-        checkpointer = checkpointer or build_checkpointer()
-        store = store or build_store()
-    # HITL 没有 checkpointer 无法中断 / 恢复 —— 自动补一个进程内 checkpointer。
-    if interrupts and checkpointer is None:
-        checkpointer = build_checkpointer()
+    if platform_managed:
+        # 部署平台(Aegra 等)负责持久化:此处不附带 checkpointer / store。
+        checkpointer = None
+        store = None
+    else:
+        if managed_checkpointer:
+            checkpointer = checkpointer or InMemorySaver()
+            store = store or InMemoryStore()
+        # HITL 没有 checkpointer 无法中断 / 恢复 —— 自动补一个进程内 checkpointer。
+        if interrupt_on and checkpointer is None:
+            checkpointer = InMemorySaver()
 
     return create_deep_agent(
-        model=the_model,
-        tools=all_tools,
+        model=llm,
+        tools=list(tools or []),
         system_prompt=system_prompt,
         middleware=middleware,
         subagents=list(subagents) if subagents else [],
         skills=skills,
         memory=memory,
         backend=backend,
-        interrupt_on=interrupts or None,
+        interrupt_on=interrupt_on or None,
         checkpointer=checkpointer,
         store=store,
         name=name,

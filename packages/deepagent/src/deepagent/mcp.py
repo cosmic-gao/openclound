@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
 
+from langchain_mcp_adapters.client import MultiServerMCPClient
+
 if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
 
@@ -39,9 +41,6 @@ async def load_mcp_tools(servers: dict[str, dict[str, Any]]) -> list[BaseTool]:
     """
     if not servers:
         return []
-
-    # 延迟导入:仅在真正使用 MCP 时才要求安装 langchain-mcp-adapters。
-    from langchain_mcp_adapters.client import MultiServerMCPClient
 
     client = MultiServerMCPClient(cast("Any", servers), tool_name_prefix=True)
     return await client.get_tools()

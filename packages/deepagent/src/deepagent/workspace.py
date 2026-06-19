@@ -10,7 +10,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from deepagent.config import resolve_workspace
+from deepagent.config import resolve_path
 
 #: 包内随附的模板目录(示例 skills 与 memories)。
 _DATA_DIR = Path(__file__).parent / "_data"
@@ -19,12 +19,7 @@ _DATA_DIR = Path(__file__).parent / "_data"
 _TEMPLATE_SUBDIRS = ("skills", "memories")
 
 
-def template_dir() -> Path:
-    """返回包内模板目录(``_data/``)。"""
-    return _DATA_DIR
-
-
-def ensure_workspace(workspace: str | Path) -> Path:
+def init_workspace(workspace: str | Path) -> Path:
     """确保工作区就绪;子目录缺失时从模板初始化。
 
     Args:
@@ -33,7 +28,7 @@ def ensure_workspace(workspace: str | Path) -> Path:
     Returns:
         解析后的工作区绝对路径。
     """
-    root = resolve_workspace(workspace)
+    root = resolve_path(workspace)
     root.mkdir(parents=True, exist_ok=True)
 
     for name in _TEMPLATE_SUBDIRS:

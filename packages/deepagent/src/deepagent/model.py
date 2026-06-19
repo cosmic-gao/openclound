@@ -10,7 +10,7 @@ from __future__ import annotations
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
-from deepagent.config import Settings, get_settings
+from deepagent.config import Settings, export_openai_env, get_settings
 
 
 def build_model(
@@ -29,6 +29,8 @@ def build_model(
         :class:`~langchain_openai.ChatOpenAI`。
     """
     settings = settings or get_settings()
+    # 让同进程内的其他 OpenAI 兼容组件(embeddings 等)也走同一网关。
+    export_openai_env(settings)
     return ChatOpenAI(
         model=model or settings.model,
         base_url=settings.base_url,

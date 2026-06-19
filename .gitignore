@@ -32,6 +32,9 @@ __pycache__/
 *.egg-info/
 .python-version
 
+# deepagent 运行时工作区(由 _data 模板生成,不入库)
+.agent/
+
 # 编辑器 / 操作系统
 .DS_Store
 .idea/
