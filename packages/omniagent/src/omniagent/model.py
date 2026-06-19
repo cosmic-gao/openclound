@@ -1,8 +1,8 @@
-"""模型层:从 litellm 网关(OpenAI 兼容)接入。
+"""模型层:经 OpenAI 兼容端点(如 litellm 网关)接入。
 
-litellm proxy 暴露标准 OpenAI ``/v1`` API,因此用 :class:`langchain_openai.ChatOpenAI`
-直接对接(litellm 官方推荐方式),无需引入 litellm 包体。``create_deep_agent``
-接受任意 :class:`~langchain_core.language_models.BaseChatModel` 实例,可直接传入。
+端点暴露标准 OpenAI ``/v1`` API,故用 :class:`langchain_openai.ChatOpenAI` 直接对接,
+无需各家厂商 SDK。``create_deep_agent`` 接受任意
+:class:`~langchain_core.language_models.BaseChatModel` 实例。
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ def build_model(
     *,
     model: str | None = None,
 ) -> ChatOpenAI:
-    """构建指向 litellm 网关的聊天模型。
+    """构建指向 OpenAI 兼容端点的聊天模型。
 
     Args:
         settings: 覆盖默认配置;为空则调用 :func:`~omniagent.config.get_settings`。

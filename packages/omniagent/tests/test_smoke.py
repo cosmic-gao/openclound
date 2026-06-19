@@ -266,55 +266,59 @@ def test_aegra_graph_factory() -> None:
 # ————————————————————————— 多租户 / skill —————————————————————————
 
 
-def test_tenant_skill_sources(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    """返回 [公有, 私有];公有从 _data 初始化,私有目录自动创建。"""
+def test_skill_sources(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """返回 [公有, 租户共享];公有从 _data 初始化,租户目录自动创建。"""
     from pathlib import Path
 
-    from omniagent.workspace import tenant_skill_sources
+    from omniagent.workspace import skill_sources
 
-    pub, priv = tenant_skill_sources(tmp_path / "skl", "t1", "a1")
+    pub, tenant = skill_sources(tmp_path / "skl", "t1")
     assert pub.endswith("/public")
     assert (Path(pub) / "deep-research" / "SKILL.md").is_file()  # 公有已 seed
-    assert Path(priv).is_dir()  # 私有已建
+    assert Path(tenant).is_dir() and tenant.endswith("/t1")  # 租户目录已建
 
 
 def test_skill_crud(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    """save / list / delete 私有 skill(含多文件脚本)。"""
+    """save / list / delete 租户共享 skill(含多文件脚本)。"""
     from omniagent import delete_skill, list_skills, save_skill
 
     root = tmp_path / "skl"
     save_skill(
         root,
         "t1",
-        "a1",
         "my",
         {"SKILL.md": "---\nname: my\ndescription: d\n---\n", "scripts/run.py": "x=1"},
     )
-    assert "my" in list_skills(root, "t1", "a1")["private"]
-    assert (root / "t1" / "a1" / "my" / "scripts" / "run.py").is_file()
-    assert delete_skill(root, "t1", "a1", "my") is True
-    assert "my" not in list_skills(root, "t1", "a1")["private"]
+    assert "my" in list_skills(root, "t1")["tenant"]
+    assert (root / "t1" / "my" / "scripts" / "run.py").is_file()
+    assert delete_skill(root, "t1", "my") is True
+    assert "my" not in list_skills(root, "t1")["tenant"]
 
 
 def test_skill_rejects_traversal(tmp_path) -> None:  # type: ignore[no-untyped-def]
     from omniagent import save_skill
 
     with pytest.raises(ValueError):  # noqa: PT011 - 名称穿越
-        save_skill(tmp_path, "t1", "a1", "../evil", {"SKILL.md": "x"})
+        save_skill(tmp_path, "t1", "../evil", {"SKILL.md": "x"})
     with pytest.raises(ValueError):  # noqa: PT011 - 文件路径穿越
-        save_skill(tmp_path, "t1", "a1", "ok", {"../evil.py": "x"})
+        save_skill(tmp_path, "t1", "ok", {"../evil.py": "x"})
     with pytest.raises(ValueError):  # noqa: PT011 - 缺 SKILL.md
-        save_skill(tmp_path, "t1", "a1", "ok", {"a.txt": "x"})
+        save_skill(tmp_path, "t1", "ok", {"a.txt": "x"})
 
 
-def test_graph_factory_per_tenant_agent() -> None:
-    """工厂图按 (tenant, agent) 装配;无鉴权时租户回退 configurable.tenant_id。"""
-    from omniagent.graph import _resolve_tenant_agent, graph
+def test_graph_factory_scope_and_build() -> None:
+    """工厂图按 (user, tenant, agent) 装配;无鉴权时回退 configurable。"""
+    from omniagent.graph import _resolve_scope, graph
 
     cfg = {
-        "configurable": {"tenant_id": "t1", "agent_id": "a1", "system_prompt": "scene"}
+        "configurable": {
+            "user_id": "u1",
+            "tenant_id": "t1",
+            "agent_id": "a1",
+            "system_prompt": "scene",
+        }
     }
-    assert _resolve_tenant_agent(cfg) == ("t1", "a1", "scene")
+    assert _resolve_scope(cfg) == ("u1", "t1", "a1", "scene")
     g = graph(cfg)
     assert hasattr(g, "astream")
     assert g.checkpointer is None  # 平台托管持久化
@@ -351,49 +355,65 @@ def test_graph_rejects_bad_agent() -> None:
         graph({"configurable": {"agent_id": "../escape"}})
 
 
-def test_resolve_tenant_from_auth_user() -> None:
-    """租户取自鉴权 ``User`` 对象(无 ``.get``):tenant_id 优先、org_id 回退、皆缺
-    -> public;且客户端 configurable.tenant_id 不能伪造(有鉴权身份时被忽略)。"""
+def test_resolve_scope_from_auth_user() -> None:
+    """鉴权 ``User`` 对象:identity 映射 user、tenant_id 映射 tenant;
+    客户端 configurable 不可伪造(有鉴权身份时被忽略)。"""
     auth = pytest.importorskip("aegra_api.models.auth")
     user_cls = auth.User
-    from omniagent.graph import _resolve_tenant_agent
+    from omniagent.graph import _resolve_scope
 
-    def tenant_of(user: object, **extra: object) -> str:
+    def scope(user: object, **extra: object) -> tuple[str, str, str, str]:
         cfg = {"configurable": {"agent_id": "a1", "langgraph_auth_user": user, **extra}}
-        return _resolve_tenant_agent(cfg)[0]
+        return _resolve_scope(cfg)
 
-    # tenant_id 为 extra 字段;org_id 为一等字段(回退);均缺失 -> public
-    assert tenant_of(user_cls(identity="u1", tenant_id="t1")) == "t1"
-    assert tenant_of(user_cls(identity="u1", org_id="o1")) == "o1"
-    assert tenant_of(user_cls(identity="u1", tenant_id="t1", org_id="o1")) == "t1"
-    assert tenant_of(user_cls(identity="u1")) == "public"
-    # 防伪造:有鉴权身份时,客户端 configurable.tenant_id 被忽略
-    spoof = user_cls(identity="u1", tenant_id="real")
-    assert tenant_of(spoof, tenant_id="attacker") == "real"
+    # identity=用户(Aegra 隔离锚),tenant_id=租户(自定义字段)
+    user, tenant, agent, _sp = scope(user_cls(identity="u1", tenant_id="t1"))
+    assert (user, tenant, agent) == ("u1", "t1", "a1")
+    assert scope(user_cls(identity="u2"))[1] == "public"  # 无 tenant_id -> public
+    # 防伪造:有鉴权身份时,客户端 configurable.user_id / tenant_id 被忽略
+    spoof = user_cls(identity="real", tenant_id="realt")
+    u, t, _a, _s = scope(spoof, user_id="attacker", tenant_id="attackt")
+    assert (u, t) == ("real", "realt")
 
 
-def test_purge_agent_cascades(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    """purge 清理私有 skill / 工作目录(Aegra 删 assistant 记录,我方清文件)。"""
+def test_auth_resolve_identity() -> None:
+    """auth handler:dev 信任 X-Tenant-Id;无凭证回退 public;bearer 取 subject。"""
+    from omniagent.auth import resolve_identity
+
+    out = resolve_identity({"x-tenant-id": "t1", "x-user-id": "u1"}, dev_auth=True)
+    assert out == {"identity": "u1", "tenant_id": "t1"}
+    assert resolve_identity({}, dev_auth=True)["tenant_id"] == "public"
+    # 非 dev、无 token -> 匿名 public(开箱即用,等价 noop)
+    assert resolve_identity({"x-tenant-id": "t1"}, dev_auth=False) == {
+        "identity": "anonymous",
+        "tenant_id": "public",
+    }
+    # bearer token -> subject 作 identity
+    assert resolve_identity({"authorization": "Bearer abc"})["identity"] == "abc"
+
+
+def test_purge_agent(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """purge 清某用户某 agent 的工作目录;租户共享 skill 不受影响。"""
     from omniagent import purge_agent, save_skill
 
     skl, ws = tmp_path / "skl", tmp_path / "ws"
-    md = "---\nname: s\ndescription: d\n---\n"
-    save_skill(skl, "t1", "a1", "s", {"SKILL.md": md})
-    (ws / "work" / "t1" / "a1").mkdir(parents=True)
-    assert purge_agent(skl, ws, "t1", "a1") == {"skills": True, "work": True}
-    assert not (skl / "t1" / "a1").exists()
-    assert not (ws / "work" / "t1" / "a1").exists()
-    assert purge_agent(skl, ws, "t1", "a1") == {"skills": False, "work": False}
+    save_skill(skl, "t1", "s", {"SKILL.md": "---\nname: s\ndescription: d\n---\n"})
+    (ws / "work" / "t1" / "u1" / "a1").mkdir(parents=True)
+    assert purge_agent(ws, "t1", "u1", "a1") is True
+    assert not (ws / "work" / "t1" / "u1" / "a1").exists()
+    assert (skl / "t1" / "s").is_dir()  # 租户 skill 不随单个 agent 删
+    assert purge_agent(ws, "t1", "u1", "a1") is False
 
 
-def test_graph_caches_per_agent() -> None:
-    """同 (租户, agent, system_prompt) 复用编译图;不同 agent 各自独立。"""
+def test_graph_caches_per_scope() -> None:
+    """同 (user, tenant, agent, system_prompt) 复用图;不同 agent / 用户各自独立。"""
     from omniagent.graph import graph
 
-    g1 = graph({"configurable": {"tenant_id": "t1", "agent_id": "a1"}})
-    g2 = graph({"configurable": {"tenant_id": "t1", "agent_id": "a1"}})
-    assert g1 is g2
-    assert graph({"configurable": {"tenant_id": "t1", "agent_id": "a2"}}) is not g1
+    base = {"user_id": "u1", "tenant_id": "t1", "agent_id": "a1"}
+    g1 = graph({"configurable": base})
+    assert graph({"configurable": dict(base)}) is g1
+    assert graph({"configurable": {**base, "agent_id": "a2"}}) is not g1
+    assert graph({"configurable": {**base, "user_id": "u2"}}) is not g1
 
 
 def test_http_routes() -> None:

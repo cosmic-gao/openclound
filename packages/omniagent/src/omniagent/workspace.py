@@ -25,7 +25,7 @@ def init_workspace(workspace: str | Path, *, seed: bool = True) -> Path:
     Args:
         workspace: 工作区目录(可为相对 / ``~`` 路径)。
         seed: 是否在子目录缺失时从 ``_data/`` 模板复制(单机/本地嵌入用 True;
-            多租户 per-agent 工作目录用 False(skill 改由 ``skill_sources`` 提供)。
+            多租户 per-user 工作目录用 False,skill 改由 ``skill_sources`` 提供)。
 
     Returns:
         解析后的工作区绝对路径。
@@ -56,41 +56,36 @@ def seed_public_skills(skills_root: str | Path) -> Path:
     return public
 
 
-def tenant_skill_sources(skills_root: str | Path, tenant: str, agent: str) -> list[str]:
-    """返回某 ``(tenant, agent)`` 的 skill 源:``[公有, 私有]``(绝对 POSIX 路径)。
+def skill_sources(skills_root: str | Path, tenant: str) -> list[str]:
+    """返回 skill 源 ``[公有, 租户]``(绝对 POSIX 路径,同名时租户覆盖公有)。
 
-    公有在前、私有在后 —— 同名时私有覆盖公有(``SkillsMiddleware`` "后者优先")。
-    私有目录缺失时自动创建(空目录会被安全地加载为 0 个 skill)。
+    同租户的所有用户 / agent 共享租户 skill;目录缺失时自动创建。
     """
     root = resolve_path(skills_root)
     public = seed_public_skills(root)
-    private = root / safe_segment(tenant) / safe_segment(agent)
-    private.mkdir(parents=True, exist_ok=True)
-    return [public.as_posix(), private.as_posix()]
+    tenant_dir = root / safe_segment(tenant)
+    tenant_dir.mkdir(parents=True, exist_ok=True)
+    return [public.as_posix(), tenant_dir.as_posix()]
 
 
-def purge_agent(
-    skills_root: str | Path, workspace: str | Path, tenant: str, agent: str
-) -> dict[str, bool]:
-    """清除某 agent 在 agent 侧的本地文件:私有 skill 目录 + 工作目录。
+def purge_agent(workspace: str | Path, tenant: str, user: str, agent: str) -> bool:
+    """清除某用户某 agent 的工作目录 work/<tenant>/<user>/<agent>;不存在则返回 False。
 
-    用于删 agent 流程:Aegra ``DELETE /assistants/{id}`` 删 assistant 记录(权威),本
-    函数清磁盘文件(Aegra 不会清)。命名为 ``purge`` 以区别于"删除 agent 记录"。
-    返回各目录是否被删除。
+    用于删 assistant 流程:Aegra ``DELETE /assistants/{id}`` 删记录(权威,按用户私有),
+    本函数清该 agent 的磁盘工作目录(Aegra 不会清)。**租户共享 skill 不在此删** —— 它
+    属租户、可被其他用户 / agent 复用,删租户 skill 走 skill 管理接口。
     """
-    tenant_s, agent_s = safe_segment(tenant), safe_segment(agent)
-    targets = {
-        "skills": resolve_path(skills_root) / tenant_s / agent_s,
-        "work": resolve_path(workspace) / "work" / tenant_s / agent_s,
-    }
-    removed: dict[str, bool] = {}
-    for label, path in targets.items():
-        if path.is_dir():
-            shutil.rmtree(path)
-            removed[label] = True
-        else:
-            removed[label] = False
-    return removed
+    target = (
+        resolve_path(workspace)
+        / "work"
+        / safe_segment(tenant)
+        / safe_segment(user)
+        / safe_segment(agent)
+    )
+    if target.is_dir():
+        shutil.rmtree(target)
+        return True
+    return False
 
 
 def has_skills(root: Path) -> bool:

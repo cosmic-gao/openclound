@@ -36,7 +36,7 @@ from omniagent.skills import delete_skill, list_skills, save_skill
 from omniagent.workspace import (
     init_workspace,
     purge_agent,
-    tenant_skill_sources,
+    skill_sources,
 )
 
 __all__ = [
@@ -59,6 +59,6 @@ __all__ = [
     "purge_agent",
     "resolve_path",
     "save_skill",
-    "tenant_skill_sources",
+    "skill_sources",
 ]
 __version__ = "0.1.0"

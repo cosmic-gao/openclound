@@ -49,7 +49,7 @@ class Settings(BaseSettings):
 
     # —— 工作区 / skills ——
     workspace: str = ".agent"
-    # skill 根:<skills_root>/public(公有)+ <skills_root>/<tenant>/<agent>(私有)
+    # skill 根:<skills_root>/public(全局)+ <skills_root>/<tenant>(租户共享)
     skills_root: str = ".agent/skills"
 
     # —— 能力开关 ——

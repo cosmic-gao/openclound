@@ -67,8 +67,6 @@ def build_agent(
     system_prompt: str = DEFAULT_SYSTEM_PROMPT,
     settings: Settings | None = None,
     model: BaseChatModel | None = None,
-    enable_skills: bool = True,
-    enable_memory: bool = True,
     skill_sources: list[str] | None = None,
     managed_checkpointer: bool = False,
     checkpointer: BaseCheckpointSaver[Any] | None = None,
@@ -88,18 +86,14 @@ def build_agent(
         system_prompt: 追加到 deepagents 内置系统提示之前的指令。
         settings: 运行配置;为空则调用 :func:`~omniagent.config.get_settings`。
         model: 直接指定模型实例,覆盖 ``settings`` 中的网关模型。
-        enable_skills: 是否加载工作区 ``skills/``(仅 ``skill_sources`` 为空时生效)。
-        enable_memory: 是否加载 ``memories/AGENTS.md`` 并注入系统提示。
-        skill_sources: 显式 skill 源路径列表(多租户用,如公有 + 租户私有目录的绝对路径)。
-            提供时直接采用、且不再从模板初始化工作区;为空则回退到工作区 ``skills/``。
-        managed_checkpointer: ``True`` 时**自动**附带进程内 checkpointer / store
-            (短期 + 长期记忆)。也可通过 ``checkpointer`` / ``store`` 显式传入。
+        skill_sources: 显式 skill 源路径列表(多租户用,如公有 + 租户目录的绝对路径)。
+            提供时直接采用、不再 seed 工作区模板;为空则回退到工作区 ``skills/``(有
+            ``SKILL.md`` 才加载),并注入 ``memories/AGENTS.md``(存在时)。
+        managed_checkpointer: ``True`` 时自动附带进程内 checkpointer / store。
         checkpointer: 显式短期记忆;优先于 ``managed_checkpointer`` 自动创建的实例。
         store: 显式长期记忆。
-        platform_managed: ``True`` 时由部署平台(如 Aegra / LangGraph Platform)在
-            运行时注入 Postgres 持久层,故**不**附带任何 checkpointer / store,也不为
-            HITL 自动补 checkpointer(平台的 checkpointer 即可支撑中断 / 恢复)。
-            用于 :mod:`omniagent.graph` 暴露给 Aegra 的图工厂。
+        platform_managed: ``True`` 时持久层由部署平台(如 Aegra)在运行时注入,故**不**
+            附带 checkpointer / store,也不为 HITL 自动补(用于 :mod:`omniagent.graph`)。
         extra_middleware: 追加到能力 / 安全中间件之后的自定义中间件。
         name: agent 名称。
 
@@ -115,8 +109,8 @@ def build_agent(
     backend = _build_backend(settings, root)
 
     if standalone:
-        skills = ["skills"] if enable_skills and has_skills(root) else None
-        memory = memory_files(root) if enable_memory else None
+        skills = ["skills"] if has_skills(root) else None
+        memory = memory_files(root) or None
     else:
         skills = skill_sources or None
         memory = None  # 多租户:场景由 assistant 的 system_prompt 提供

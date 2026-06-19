@@ -18,9 +18,9 @@ openclound 的 **通用 agent 基础包**,封装 [LangChain `deepagents`](https:
 | 健壮性 | 模型 / 工具自动重试、调用上限、备用模型回退 |
 | 上下文管理 | 过旧工具输出自动清理(`ContextEditingMiddleware`) |
 | 安全 | 可选 PII 脱敏、HITL(高危工具人工确认) |
-| 多租户 | 工厂图按 (tenant, agent) 装配 skill 与场景,公有 + 私有 skill 隔离 |
+| 多租户 | 用户私有 agent/会话(Aegra)+ 租户共享 skill;工厂图按 (user, tenant, agent) 装配 |
 
-模型经 **litellm 网关**(OpenAI 兼容)接入,默认指向
+模型经 **OpenAI 兼容端点**(如 litellm 网关)接入,默认指向
 `https://aigateway-sandbox.mspbots.ai/v1`,用 `ChatOpenAI` 对接,因此无需直连
 各家厂商 SDK,换模型只改一个环境变量。
 
@@ -46,9 +46,10 @@ packages/omniagent/
 │       ├── mcp.py          # load_mcp_tools():加载 MCP server 工具
 │       ├── middleware.py   # build_middleware() / interrupts()
 │       ├── workspace.py    # init_workspace() + 公有/租户 skill 源解析
-│       ├── skills.py       # save/list/delete_skill():私有 skill 增删查(热更新)
+│       ├── skills.py       # save/list/delete_skill():租户共享 skill 增删查(热更新)
 │       ├── builder.py      # build_agent() / build_async_agent() 入口
-│       ├── graph.py        # Aegra 工厂图:按 (tenant, agent) 装配 skill 与场景
+│       ├── graph.py        # Aegra 工厂图:按 (user, tenant, agent) 装配 skill 与场景
+│       ├── auth.py         # Aegra 鉴权:请求 -> {identity=用户, tenant_id=租户}
 │       ├── http.py         # skill 管理 HTTP 路由(挂 aegra.json http.app)
 │       ├── _data/          # 随包模板:skills/ 与 memories/AGENTS.md
 │       └── py.typed
@@ -141,7 +142,7 @@ cp .env.example .env        # 然后编辑 .env,至少填 OPENAI_API_KEY
 | `AGENT_TEMPERATURE` | `0.0` | 采样温度 |
 | `AGENT_FALLBACK_MODEL` | 空 | 主模型失败时的备用模型 |
 | `AGENT_WORKSPACE` | `.agent` | 工作区目录(agent 的文件系统根) |
-| `AGENT_SKILLS_ROOT` | `.agent/skills` | skill 根:`public/`(公有)+ `<tenant>/<agent>/`(私有) |
+| `AGENT_SKILLS_ROOT` | `.agent/skills` | skill 根:`public/`(全局)+ `<tenant>/`(租户共享) |
 | `AGENT_ENABLE_SHELL` | `1` | 是否启用 `shell` 工具 |
 | `AGENT_ENABLE_FILE_SEARCH` | `0` | 是否启用 ripgrep 文件搜索(deepagents 已有 glob/grep) |
 | `AGENT_ENABLE_HITL` | `0` | 高危工具是否需人工确认 |
@@ -174,6 +175,8 @@ Studio、Agent Chat UI、CopilotKit 直接连接)。
 - [`aegra.json`](aegra.json):注册图 `omniagent -> ./src/omniagent/graph.py:graph`。
 - [`graph.py`](src/omniagent/graph.py):0 参图工厂 `graph()`,内部调用
   `build_agent(platform_managed=True)`——**不带 checkpointer / store**,持久化交给 Aegra。
+- [`auth.py`](src/omniagent/auth.py):Aegra 鉴权(`auth.path`),把请求身份解析为
+  `{identity, tenant_id}`;租户即从这里进入图工厂。
 - `.env.example`:含 Aegra 部署变量(Postgres、端口、AUTH 等)。
 
 启动(需 Python **≥ 3.12** 与 Docker):
@@ -207,58 +210,86 @@ async for chunk in client.runs.stream(
 
 ## 多租户 / 多 Agent(Agent OS)
 
-模型:**租户**(鉴权身份)→ N 个 **Agent**(各有场景)→ 每次聊天一个**会话**。
+两套**正交隔离**,正好对上 Aegra 的能力(详见 [auth.py](src/omniagent/auth.py) 与
+[graph.py](src/omniagent/graph.py)):
 
-| 概念 | 映射 | 隔离 |
-|---|---|---|
-| 租户 | 鉴权 `tenant_id` | Aegra authz 过滤 assistant/thread |
-| Agent | 一个 Aegra **assistant**(`config={agent_id, system_prompt}` + `metadata={tenant_id}`) | 按租户过滤 |
-| 会话 | 一个 **thread**(每次聊天新建) | Postgres 按 `thread_id` |
+- **用户私有**:鉴权身份 `identity` = 用户。Aegra 把 assistant / thread / run / cron
+  全部按 `user_id == identity` 强隔离 —— 每个用户私有自己的 **agent(assistant)** 与
+  **会话(thread)**;omniagent 据此把**工作区**也按用户私有。
+- **租户共享**:鉴权身份的自定义字段 `tenant_id` = 租户。Aegra 不认它;omniagent 用它
+  定位**租户共享的 skill**(同租户所有用户、所有 agent 共享)+ 全局 `public`。
 
-工厂图 [graph.py](src/omniagent/graph.py) 每次 run 从 `config` 取 **租户(鉴权)+ agent(assistant 配置)**,拼出 skill 源并装配场景。
+| 维度 | 来源 | 隔离粒度 | 由谁实现 |
+|---|---|---|---|
+| agent(assistant)/ 会话(thread/run)| `identity` | **用户私有** | Aegra 原生 |
+| 工作区(execute cwd / 文件)| `tenant`+`user`+`agent` | 每 (租户,用户,agent) | omniagent |
+| skill | `tenant_id` | **租户共享** + 全局 public | omniagent |
 
-**Skill 三层(公有 + 私有,磁盘目录):**
+> 关键:Aegra 的资源隔离**硬锚定在 `user.identity`**(`threads`/`assistants`/`runs`
+> 强制 `user_id==identity`,`@auth.on.*` 的 metadata filter 对 thread 列表当前未接入)。
+> 故「用户私有」直接复用 Aegra、零额外代码;「租户共享」是 omniagent 自管的磁盘维度。
+
+工厂图 [graph.py](src/omniagent/graph.py) 每次 run 从 `config` 解析 `(user, tenant, agent)`:`user` / `tenant` **只取自**鉴权身份 `langgraph_auth_user`(`identity` / `tenant_id`),**不信**客户端 `configurable`(防伪造);无鉴权(本地直调)才回退 config。
+
+**Skill 两层(全局 public + 租户共享,磁盘目录):**
 
 ```
 AGENT_SKILLS_ROOT/
-├── public/<skill>/SKILL.md            # 公有:所有租户所有 agent 共享(从 _data 初始化)
-└── <tenant>/<agent>/<skill>/          # 私有:仅该租户该 agent;可含多文件 + 脚本
+├── public/<skill>/SKILL.md     # 全局:所有租户共享(从 _data 初始化)
+└── <tenant>/<skill>/           # 租户:同租户所有用户 / agent 共享;可含多文件 + 脚本
     └── SKILL.md (+ scripts/…, …)
 ```
 
-skill 源 = `[public, <tenant>/<agent>]`(同名私有覆盖公有)。
+skill 源 = `[public, <tenant>]`(同名租户覆盖公有)。
 
-**热更新**:往私有目录写/删文件 → **下一个新会话**自动重扫加载(`before_agent`),无需重启。写入有两种方式:
+**热更新**:往租户目录写/删文件 → **下一个新会话**自动重扫加载(`before_agent`),无需重启。写入有两种方式:
 
 1. 代码:`from omniagent import save_skill, list_skills, delete_skill`(纯函数,见 [skills.py](src/omniagent/skills.py));
 2. HTTP(挂在 `aegra.json` 的 `http.app`,见 [http.py](src/omniagent/http.py)):
-   - `GET /skills?agent_id=…` 列出 · `PUT /skills/{name}?agent_id=…` 写入(body `{"files": {...}}`)· `DELETE /skills/{name}` 删除
-   - 租户取自鉴权身份(请按你的 Aegra auth 调整 `_tenant()`)。
+   - `GET /skills` 列出 · `PUT /skills/{name}` 写入(body `{"files": {...}}`)· `DELETE /skills/{name}` 删除
+   - 租户取自鉴权身份的 `tenant_id`。
 
 > 脚本类 skill **必须在磁盘**才能被 `execute` 执行(`StoreBackend`/Postgres 跑不了脚本);多副本时让各副本共享/同步该 skill 目录即可。
+
+### 本地用 agent-chat-ui 验证
+
+[agent-chat-ui](https://github.com/langchain-ai/agent-chat-ui)(LangGraph 官方聊天前端)可直连 Aegra。我方为它加了 **User ID** 与 **Tenant ID** 输入,分别经 `X-User-Id` / `X-Tenant-Id` 头传给后端,由 [auth.py](src/omniagent/auth.py) 解析成鉴权身份:
+
+```bash
+# 后端:dev 鉴权才信任明文 X-User-Id / X-Tenant-Id(生产请改用 token)
+echo "AGENT_DEV_AUTH=1" >> .env
+uv run aegra dev                 # http://127.0.0.1:2026
+
+# 前端(agent-chat-ui 目录):.env 设
+#   NEXT_PUBLIC_API_URL=http://localhost:2026
+#   NEXT_PUBLIC_ASSISTANT_ID=omniagent
+pnpm install && pnpm dev         # http://localhost:3000
+```
+
+- **User ID**(如 `alice`、`bob`):换用户 → agent 与会话互不可见(Aegra 按 `identity` 私有)。
+- **Tenant ID**(如 `acme`):同租户不同用户 → 共享同一套租户 skill;留空即全局 `public`。
+- 多个 **Agent** = 同一用户在 Aegra 建多个 assistant,前端切 Assistant ID 即可。
 
 ### 能力对照(谁负责)
 
 | # | 需求 | 由谁实现 | 接口 / 位置 |
 |---|---|---|---|
-| 1 | 每租户每 Agent 独立 | **Aegra**(assistant)+ 我方按 `agent_id` 装配独立 skill/work | `POST /assistants` · `graph.py` |
-| 2 | 用户会话独立 | **Aegra**(thread,Postgres 按 `thread_id`,归属 assistant+租户) | `POST /threads` · runs |
-| 3 | 全租户共享 public skill | **我方** | `seed_public_skills` + 公有源 |
-| 4 | 每 Agent 私有 skill 增删改查 | **我方** | `save/list/delete_skill` · `GET/PUT/DELETE /skills` |
-| 5 | 查 Agent 在线/可用状态 | **Aegra 原生**(可用=存在)+ 我方 skill 就绪 | `GET /assistants/{id}` · `GET /skills?agent_id=…` |
-| 6 | 查租户 Agent 列表 | **Aegra 原生** | `GET /assistants` · `POST /assistants/search`(按租户过滤) |
-| 7 | 删租户下 Agent | **Aegra 原生**删记录 + **我方**清文件 | `DELETE /assistants/{id}` + `purge_agent()` |
+| 1 | 每用户私有 agent / 会话 | **Aegra 原生**(`user_id==identity`) | `/assistants` · `/threads` |
+| 2 | 租户内共享 skill(+ 全局 public) | **我方** | `skill_sources` · `skills.py` |
+| 3 | skill 增删查(热更新) | **我方** | `save/list/delete_skill` · `GET/PUT/DELETE /skills` |
+| 4 | 工作区按 (租户,用户,agent) 私有 | **我方** | `graph.py` |
+| 5 | 查 / 列 / 删 agent、查会话 | **Aegra 原生** | `GET/POST/DELETE /assistants` · `/threads` |
+| 6 | 删 agent 后清工作目录 | **我方** | `purge_agent()`(接到删除流程) |
 
-> 注册 / 列表 / 删除记录 / 可用状态(#1#6#7#5)全部走 Aegra 原生 `/assistants`,**不重复造**。
-> 我方只补 Aegra **没有**的:公有/私有 skill(#3#4,含脚本、热更新)与删 agent 后的文件清理
-> (#7 的 `purge_agent()`,接到你的删除流程里)。配置型 agent "在线"即"已注册",故 #5 用
-> `GET /assistants/{id}` 判存在 + 我方 `GET /skills` 看 skill 就绪即可,无需额外探测接口。
-> 安全:`tenant` 始终取自鉴权身份;`tenant`/`agent`/skill 名经 `safe_segment` 校验,杜绝目录穿越。
+> agent 与会话的注册 / 列表 / 删除 / 在线状态全部走 Aegra 原生,**不重复造**。我方只补
+> Aegra **没有**的:租户共享 skill(含脚本、热更新)与删 agent 后的工作目录清理。
+> 安全:`user` / `tenant` 只取自鉴权身份([auth.py](src/omniagent/auth.py));
+> `user`/`tenant`/`agent`/skill 名经 `safe_segment` 校验,杜绝目录穿越。
 
 ## 设计说明
 
-- **模型层**:litellm 网关暴露标准 OpenAI `/v1`,故用 `ChatOpenAI` 直连
-  (litellm 官方推荐),`create_deep_agent` 接受 `BaseChatModel` 实例直接传入。
+- **模型层**:OpenAI 兼容端点(如 litellm 网关)暴露标准 `/v1`,故用 `ChatOpenAI`
+  直连,`create_deep_agent` 接受 `BaseChatModel` 实例直接传入。
   聊天模型显式传 `base_url`/`api_key`,不依赖 `OPENAI_*`;但 `build_model` 会调用
   `export_openai_env()` 把网关回填到 `OPENAI_API_KEY`/`OPENAI_BASE_URL`,让 **embeddings**
   等其他 OpenAI 兼容组件(如 Aegra 语义 store)也走同一网关——只配 `AGENT_*` 即可。
