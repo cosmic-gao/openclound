@@ -2,8 +2,8 @@
   "$schema": "https://json.schemastore.org/tsconfig",
   "display": "@openclound/tsconfig — base",
   "compilerOptions": {
-    "target": "ES2023",
-    "lib": ["ES2023"],
+    "target": "ES2024",
+    "lib": ["ES2024"],
     "moduleDetection": "force",
     "resolveJsonModule": true,
     "esModuleInterop": true,
@@ -11,6 +11,7 @@
     "skipLibCheck": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,

@@ -6,5 +6,10 @@
     "domains": {
       "react": "recommended"
     }
+  },
+  "javascript": {
+    "formatter": {
+      "jsxQuoteStyle": "double"
+    }
   }
 }

@@ -5,7 +5,8 @@
     "enabled": true,
     "indentStyle": "space",
     "indentWidth": 2,
-    "lineWidth": 100
+    "lineWidth": 100,
+    "lineEnding": "lf"
   },
   "linter": {
     "enabled": true,
@@ -16,6 +17,12 @@
   "javascript": {
     "formatter": {
       "quoteStyle": "double"
+    }
+  },
+  // 允许 .json 带注释(tsconfig 等实为 jsonc),避免误报
+  "json": {
+    "parser": {
+      "allowComments": true
     }
   },
   "assist": {

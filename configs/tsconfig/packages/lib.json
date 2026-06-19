@@ -5,6 +5,12 @@
     "declaration": true,
     "declarationMap": true,
     "stripInternal": true,
-    "noEmit": false
-  }
+    "isolatedDeclarations": true,
+    "noEmit": false,
+    "rootDir": "${configDir}/src",
+    "outDir": "${configDir}/dist",
+    "tsBuildInfoFile": "${configDir}/dist/.tsbuildinfo"
+  },
+  "include": ["${configDir}/src/**/*"],
+  "exclude": ["${configDir}/src/**/*.test.ts", "${configDir}/src/**/*.spec.ts"]
 }

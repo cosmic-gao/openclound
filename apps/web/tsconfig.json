@@ -1,9 +1,0 @@
-{
-  "extends": ["@openclound/tsconfig/node", "@openclound/tsconfig/app"],
-  "compilerOptions": {
-    "outDir": "./dist",
-    "rootDir": "./src"
-  },
-  "include": ["src/**/*"],
-  "references": [{ "path": "../../packages/utils" }]
-}
