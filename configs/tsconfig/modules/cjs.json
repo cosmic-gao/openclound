@@ -1,0 +1,9 @@
+{
+  "display": "@openclound/tsconfig — cjs(模块输出片段)",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "Node10",
+    "verbatimModuleSyntax": false,
+    "esModuleInterop": true
+  }
+}

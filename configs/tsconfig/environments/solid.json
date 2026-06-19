@@ -1,0 +1,9 @@
+{
+  "extends": "./vite.json",
+  "display": "@openclound/tsconfig — solid(SolidJS + Vite)",
+  "compilerOptions": {
+    "jsx": "preserve",
+    "jsxImportSource": "solid-js",
+    "types": ["vite/client"]
+  }
+}

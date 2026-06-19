@@ -1,0 +1,9 @@
+{
+  "extends": ["@openclound/tsconfig/node", "@openclound/tsconfig/lib"],
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src"
+  },
+  "include": ["src/**/*"],
+  "exclude": ["src/**/*.test.ts", "dist", "node_modules"]
+}

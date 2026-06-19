@@ -1,0 +1,7 @@
+{
+  "display": "@openclound/tsconfig — app(应用,增量片段)",
+  "compilerOptions": {
+    "composite": true,
+    "noEmit": false
+  }
+}

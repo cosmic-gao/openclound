@@ -1,0 +1,7 @@
+{
+  "extends": "./vue.json",
+  "display": "@openclound/tsconfig — nuxt(Nuxt 3)",
+  "compilerOptions": {
+    "types": ["vite/client"]
+  }
+}

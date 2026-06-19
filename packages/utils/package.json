@@ -1,0 +1,27 @@
+{
+  "name": "@openclound/utils",
+  "version": "0.0.0",
+  "description": "示例共享工具库",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@openclound/tsconfig": "workspace:*"
+  }
+}

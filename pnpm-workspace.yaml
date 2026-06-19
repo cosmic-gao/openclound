@@ -1,0 +1,12 @@
+# pnpm workspace 定义:声明哪些目录属于本工作区
+packages:
+  - "apps/*"
+  - "packages/*"
+  - "configs/*"
+# 允许执行 postinstall 构建脚本的依赖(pnpm 默认出于安全会阻止)
+allowBuilds:
+  esbuild: true
+
+# 提示:可启用 catalog 统一管理多个包共享的依赖版本,例如:
+# catalog:
+#   zod: ^3.23.8

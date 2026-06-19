@@ -1,0 +1,8 @@
+{
+  "extends": "./node.json",
+  "display": "@openclound/tsconfig — electron",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["node"]
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "display": "@openclound/tsconfig — test(测试,仅类型检查不产出)",
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": true,
+    "types": ["node"]
+  }
+}

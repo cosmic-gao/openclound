@@ -1,0 +1,17 @@
+{
+  "name": "@openclound/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
+    "build": "tsc --build"
+  },
+  "dependencies": {
+    "@openclound/utils": "workspace:*"
+  },
+  "devDependencies": {
+    "@openclound/tsconfig": "workspace:*"
+  }
+}

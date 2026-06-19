@@ -1,0 +1,11 @@
+{
+  "display": "@openclound/tsconfig — monorepo(根 solution 文件)",
+  "compilerOptions": {
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "skipLibCheck": true
+  },
+  "files": [],
+  "references": []
+}

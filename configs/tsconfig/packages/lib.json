@@ -1,0 +1,10 @@
+{
+  "display": "@openclound/tsconfig — lib(可发布库,增量片段)",
+  "compilerOptions": {
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "stripInternal": true,
+    "noEmit": false
+  }
+}

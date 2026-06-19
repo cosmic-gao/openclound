@@ -1,0 +1,9 @@
+{
+  "extends": "../base.json",
+  "display": "@openclound/tsconfig — node",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"]
+  }
+}

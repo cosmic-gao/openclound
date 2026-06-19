@@ -1,0 +1,10 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.0/schema.json",
+  // 继承 React 预设并叠加 Next.js domain(检测到 next>=14 时自动激活相关规则)
+  "extends": ["./react.jsonc"],
+  "linter": {
+    "domains": {
+      "next": "recommended"
+    }
+  }
+}

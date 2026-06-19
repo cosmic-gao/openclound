@@ -1,0 +1,7 @@
+{
+  "extends": "./browser.json",
+  "display": "@openclound/tsconfig — vite",
+  "compilerOptions": {
+    "types": ["vite/client"]
+  }
+}
