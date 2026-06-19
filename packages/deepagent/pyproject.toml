@@ -1,12 +1,12 @@
 [project]
 name = "deepagent"
 version = "0.1.0"
-description = "openclound 的 deep agent 基础包:封装 LangChain deepagents 构建深度智能体。"
+description = "openclound 的 deep agent 基础包:封装 LangChain deepagents,集成 litellm 网关 / MCP / skills / memory / 安全中间件,提供类 Claude Code 的能力与 CLI。"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "August Gao", email = "August.Gao@mspbots.ai" }]
-keywords = ["deepagents", "langchain", "langgraph", "agents", "anthropic"]
+keywords = ["deepagents", "langchain", "langgraph", "agents", "anthropic", "mcp", "litellm"]
 classifiers = [
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.11",
@@ -18,7 +18,15 @@ classifiers = [
 dependencies = [
     "deepagents>=0.6.11,<0.7",
     "langchain-anthropic>=1.4.6,<2.0.0",
+    "langchain-openai>=1.3.2,<2.0.0",
+    "langchain-mcp-adapters>=0.3.0,<0.4.0",
+    "langgraph>=1.2.6,<2.0.0",
+    "pydantic>=2.0,<3.0",
+    "python-dotenv>=1.0,<2.0",
 ]
+
+[project.scripts]
+deepagent = "deepagent.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/mspbots/openclound"
