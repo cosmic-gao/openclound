@@ -12,7 +12,8 @@
 ```
 .
 ├── apps/                # 应用(私有,不发布)—— 暂空,.gitkeep 占位
-├── packages/            # 可复用 / 可发布的包 —— 暂空,.gitkeep 占位
+├── packages/            # 可复用 / 可发布的包
+│   └── deepagent/       # Python:基于 deepagents 的深度智能体基础包(uv 管理)
 ├── configs/             # 共享配置(零依赖纯配置包,可发布)
 │   ├── tsconfig/        # @openclound/tsconfig:分层 TS 预设
 │   └── biome/           # @openclound/biome-config:Biome 基线 + 框架 domain 预设
@@ -21,7 +22,7 @@
 └── biome.json           # extends 共享 Biome 基线 + 仓库级(VCS / files)
 ```
 
-> `apps/` 与 `packages/` 当前为空(仅 `.gitkeep` 占位)。放入带 `package.json` 的目录后 pnpm 自动纳入工作区。
+> `apps/` 当前为空(`.gitkeep` 占位)。`packages/` 已含 Python 包 `deepagent`(无 `package.json`,pnpm 自动忽略,由 uv 管理);放入带 `package.json` 的 JS/TS 目录后 pnpm 会自动纳入工作区。
 
 ## 常用命令
 
@@ -37,6 +38,17 @@
 
 - **TypeScript** — `@openclound/tsconfig`,分层可组合预设(环境 × 模块 × 包类型),含 React/Vue/Next/Nuxt/Solid/Electron。预设用 `${configDir}` 内置了 `rootDir`/`outDir`/`include`,使用方 `tsconfig.json` 可极简。详见 [configs/tsconfig/README.md](configs/tsconfig/README.md)。
 - **Biome** — `@openclound/biome-config`,lint/格式化基线 + 框架 domain 预设(react/next/vue/solid)。详见 [configs/biome/README.md](configs/biome/README.md)。
+
+## Python 包(polyglot)
+
+`packages/deepagent` 是 Python 包,由 [uv](https://docs.astral.sh/uv/) 管理,与 pnpm 互不干扰——pnpm 只识别带 `package.json` 的目录,自动忽略纯 Python 目录。
+
+```bash
+uv sync --directory packages/deepagent        # 安装依赖
+uv run --directory packages/deepagent pytest  # 测试
+```
+
+详见 [packages/deepagent/README.md](packages/deepagent/README.md)。
 
 ## 关键工程实践
 

@@ -7,13 +7,13 @@ packages:
 # 强制 Node / pnpm 版本满足 package.json engines(pnpm 11 起此设置在此声明,.npmrc 不再读取)
 engineStrict: true
 
-# 供应链安全(推荐):不使用发布时间不足 N 分钟的新版本,降低拉到刚发布的恶意/问题版本的风险。
-# 注:pnpm 11.5.3 仅在「校验阶段」拒绝、不会在解析阶段自动降级到较旧版本,与高频更新的传递依赖
-# (vite/vitest 依赖链中的 electron-to-chromium 等)共存时会阻塞安装;升级到 pnpm 11.7+ 后再启用,
-# 并按需用 minimumReleaseAgeExclude 放行内部包与高频传递依赖。
-# minimumReleaseAge: 1440
-# minimumReleaseAgeExclude:
-#   - "@openclound/*"
+# 供应链安全:不使用发布时间不足 24h(1440 分钟)的新版本,降低拉到刚发布的恶意/问题版本的风险。
+# pnpm 11.7+ 会在「fresh 解析」阶段自动避让过新版本;内部 @openclound/* 已放行以免拖慢自身发布。
+# 提示:增量 install 只校验现有 lockfile;若它含 <24h 的传递依赖而报错,运行
+#       `pnpm clean --lockfile && pnpm install` 触发 fresh 解析,pnpm 会自动改选满足时限的旧版本。
+minimumReleaseAge: 1440
+minimumReleaseAgeExclude:
+  - "@openclound/*"
 
 # 允许执行 postinstall 构建脚本的依赖(pnpm 默认出于安全会阻止)
 allowBuilds:
