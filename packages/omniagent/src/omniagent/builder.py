@@ -1,10 +1,10 @@
 """深度智能体构建入口:组装 model / tools / skills / memory / middleware / subagents。
 
-- **模型**:经 OpenAI 兼容端点接入(见 :mod:`deepagent.model`)。
+- **模型**:经 OpenAI 兼容端点接入(见 :mod:`omniagent.model`)。
 - **工具**:deepagents 内置工具(规划 / 文件系统 / 子代理 / shell) + 调用方工具
   + (异步入口下)MCP 工具。
 - **能力 / 安全**:shell、文件搜索、重试、调用上限、上下文管理、PII、HITL
-  (见 :mod:`deepagent.middleware`)。
+  (见 :mod:`omniagent.middleware`)。
 - **skills**:工作区 ``skills/`` 下每个含 ``SKILL.md`` 的目录(声明式按需加载)。
 - **memory**:工作区 ``memories/AGENTS.md`` 注入系统提示 + 可选短期 / 长期记忆。
 """
@@ -18,11 +18,11 @@ from deepagents.backends import FilesystemBackend, LocalShellBackend
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.memory import InMemoryStore
 
-from deepagent.config import Settings, get_settings
-from deepagent.mcp import load_mcp_tools
-from deepagent.middleware import build_middleware, interrupts
-from deepagent.model import build_model
-from deepagent.workspace import has_skills, init_workspace, memory_files
+from omniagent.config import Settings, get_settings
+from omniagent.mcp import load_mcp_tools
+from omniagent.middleware import build_middleware, interrupts
+from omniagent.model import build_model
+from omniagent.workspace import has_skills, init_workspace, memory_files
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -44,7 +44,7 @@ DEFAULT_SYSTEM_PROMPT = (
 )
 
 #: agent 名称(出现在 LangGraph 元数据 / 追踪中)。
-DEFAULT_AGENT_NAME = "openclound-deepagent"
+DEFAULT_AGENT_NAME = "openclound-omniagent"
 
 
 def _build_backend(settings: Settings, root: Path) -> FilesystemBackend:
@@ -69,6 +69,7 @@ def build_agent(
     model: BaseChatModel | None = None,
     enable_skills: bool = True,
     enable_memory: bool = True,
+    skill_sources: list[str] | None = None,
     managed_checkpointer: bool = False,
     checkpointer: BaseCheckpointSaver[Any] | None = None,
     store: BaseStore | None = None,
@@ -85,10 +86,12 @@ def build_agent(
         tools: 额外的自定义工具(与 deepagents 内置工具合并)。
         subagents: 子代理配置列表(经 ``task`` 工具调用)。
         system_prompt: 追加到 deepagents 内置系统提示之前的指令。
-        settings: 运行配置;为空则调用 :func:`~deepagent.config.get_settings`。
+        settings: 运行配置;为空则调用 :func:`~omniagent.config.get_settings`。
         model: 直接指定模型实例,覆盖 ``settings`` 中的网关模型。
-        enable_skills: 是否加载工作区 ``skills/``。
+        enable_skills: 是否加载工作区 ``skills/``(仅 ``skill_sources`` 为空时生效)。
         enable_memory: 是否加载 ``memories/AGENTS.md`` 并注入系统提示。
+        skill_sources: 显式 skill 源路径列表(多租户用,如公有 + 租户私有目录的绝对路径)。
+            提供时直接采用、且不再从模板初始化工作区;为空则回退到工作区 ``skills/``。
         managed_checkpointer: ``True`` 时**自动**附带进程内 checkpointer / store
             (短期 + 长期记忆)。也可通过 ``checkpointer`` / ``store`` 显式传入。
         checkpointer: 显式短期记忆;优先于 ``managed_checkpointer`` 自动创建的实例。
@@ -96,7 +99,7 @@ def build_agent(
         platform_managed: ``True`` 时由部署平台(如 Aegra / LangGraph Platform)在
             运行时注入 Postgres 持久层,故**不**附带任何 checkpointer / store,也不为
             HITL 自动补 checkpointer(平台的 checkpointer 即可支撑中断 / 恢复)。
-            用于 :mod:`deepagent.graph` 暴露给 Aegra 的图工厂。
+            用于 :mod:`omniagent.graph` 暴露给 Aegra 的图工厂。
         extra_middleware: 追加到能力 / 安全中间件之后的自定义中间件。
         name: agent 名称。
 
@@ -104,13 +107,19 @@ def build_agent(
         已编译的 LangGraph 图,支持 ``invoke`` / ``ainvoke`` / ``stream`` 等接口。
     """
     settings = settings or get_settings()
-    root = init_workspace(settings.workspace)
+    standalone = skill_sources is None
+    # 多租户(显式 skill_sources)下不 seed 模板,工作目录仅 mkdir。
+    root = init_workspace(settings.workspace, seed=standalone)
 
     llm = model if model is not None else build_model(settings)
     backend = _build_backend(settings, root)
 
-    skills = ["skills"] if enable_skills and has_skills(root) else None
-    memory = memory_files(root) if enable_memory else None
+    if standalone:
+        skills = ["skills"] if enable_skills and has_skills(root) else None
+        memory = memory_files(root) if enable_memory else None
+    else:
+        skills = skill_sources or None
+        memory = None  # 多租户:场景由 assistant 的 system_prompt 提供
 
     middleware = list(build_middleware(settings, workspace_root=root))
     if extra_middleware:
@@ -155,7 +164,7 @@ async def build_async_agent(
     """构建一个挂载 MCP 工具的 deep agent(异步)。
 
     Args:
-        mcp_servers: MCP server 连接配置(见 :func:`deepagent.mcp.load_mcp_tools`);
+        mcp_servers: MCP server 连接配置(见 :func:`omniagent.mcp.load_mcp_tools`);
             为空时等价于 :func:`build_agent`。
         tools: 额外的自定义工具(与 MCP 工具、内置工具合并)。
         **kwargs: 透传给 :func:`build_agent`(如 ``subagents`` / ``settings`` 等)。

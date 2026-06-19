@@ -6,7 +6,7 @@
 **基础栈之后、收尾栈之前**(见其 docstring 的 middleware 顺序说明)。
 
 shell 能力不在这里:它由 backend 提供(``LocalShellBackend`` 的跨平台 ``execute``
-工具,见 :mod:`deepagent.agent`),而非 bash-only 的 ``ShellToolMiddleware``。
+工具,见 :mod:`omniagent.builder`),而非 bash-only 的 ``ShellToolMiddleware``。
 
 HITL(高危操作人工确认)走 ``create_deep_agent`` 原生的 ``interrupt_on`` 参数
 (见 :func:`interrupts`),而非作为一条 middleware。
@@ -29,8 +29,8 @@ from langchain.agents.middleware import (
     ToolRetryMiddleware,
 )
 
-from deepagent.config import Settings, get_settings
-from deepagent.model import build_model
+from omniagent.config import Settings, get_settings
+from omniagent.model import build_model
 
 if TYPE_CHECKING:
     from langchain.agents.middleware import AgentMiddleware, InterruptOnConfig
@@ -50,7 +50,7 @@ def build_middleware(
     顺序:健壮性(重试 / 调用上限 / 回退) → 上下文管理 → PII → 文件搜索。
 
     Args:
-        settings: 运行配置;为空则调用 :func:`~deepagent.config.get_settings`。
+        settings: 运行配置;为空则调用 :func:`~omniagent.config.get_settings`。
         workspace_root: 已就绪的工作区绝对路径,用作文件搜索的根。
 
     Returns:

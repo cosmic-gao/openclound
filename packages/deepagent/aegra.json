@@ -1,9 +1,0 @@
-{
-  "dependencies": ["./src"],
-  "graphs": {
-    "deepagent": "./src/deepagent/graph.py:graph"
-  },
-  "auth": {
-    "disable_studio_auth": true
-  }
-}

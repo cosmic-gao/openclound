@@ -47,8 +47,10 @@ class Settings(BaseSettings):
     temperature: float = 0.0
     fallback_model: str | None = None
 
-    # —— 工作区 ——
+    # —— 工作区 / skills ——
     workspace: str = ".agent"
+    # skill 根:<skills_root>/public(公有)+ <skills_root>/<tenant>/<agent>(私有)
+    skills_root: str = ".agent/skills"
 
     # —— 能力开关 ——
     enable_shell: bool = True
@@ -88,3 +90,15 @@ def export_openai_env(settings: Settings | None = None) -> None:
 def resolve_path(workspace: str | Path) -> Path:
     """把工作区配置解析为绝对路径(展开 ``~``,相对当前工作目录)。"""
     return Path(workspace).expanduser().resolve()
+
+
+def safe_segment(name: str) -> str:
+    """校验单段名称(租户 / agent / skill 名);拒绝空、``.``/``..`` 与路径分隔符。
+
+    把不可信输入(``tenant`` / ``agent_id`` / skill 名)拼进文件路径前必须经此校验,
+    防止目录穿越。
+    """
+    if not name or name in {".", ".."} or "/" in name or "\\" in name:
+        msg = f"invalid name segment: {name!r}"
+        raise ValueError(msg)
+    return name

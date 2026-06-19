@@ -1,0 +1,12 @@
+{
+  "dependencies": ["./src"],
+  "graphs": {
+    "omniagent": "./src/omniagent/graph.py:graph"
+  },
+  "http": {
+    "app": "./src/omniagent/http.py:app"
+  },
+  "auth": {
+    "disable_studio_auth": true
+  }
+}

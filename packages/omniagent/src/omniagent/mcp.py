@@ -1,8 +1,8 @@
 """MCP 工具加载:把 MCP server 暴露的工具加载为 LangChain 工具。
 
 基于 ``langchain-mcp-adapters`` 的 ``MultiServerMCPClient``,加载结果可直接传给
-:func:`deepagent.agent.build_agent` 的 ``tools`` 参数,或经由
-:func:`deepagent.agent.build_async_agent` 的 ``mcp_servers`` 参数自动加载。
+:func:`omniagent.builder.build_agent` 的 ``tools`` 参数,或经由
+:func:`omniagent.builder.build_async_agent` 的 ``mcp_servers`` 参数自动加载。
 
 MCP 连接是异步的,因此本模块的入口为 ``async``。
 """

@@ -10,7 +10,7 @@ from __future__ import annotations
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
-from deepagent.config import Settings, export_openai_env, get_settings
+from omniagent.config import Settings, export_openai_env, get_settings
 
 
 def build_model(
@@ -21,7 +21,7 @@ def build_model(
     """构建指向 litellm 网关的聊天模型。
 
     Args:
-        settings: 覆盖默认配置;为空则调用 :func:`~deepagent.config.get_settings`。
+        settings: 覆盖默认配置;为空则调用 :func:`~omniagent.config.get_settings`。
         model: 覆盖 ``settings.model`` 的模型名(便于子代理/回退指定不同模型)。
 
     Returns:
