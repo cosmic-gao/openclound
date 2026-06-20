@@ -1,18 +1,14 @@
-"""按 :class:`~omniagent.modes.ResolvedConfig` 组装 deep agent。
-
-纯 Aegra 形态:持久层由平台注入(无 checkpointer / store)。模型、工具裁剪、HITL、审核、
-skill、工作区由 per-agent 配置驱动;MCP 工具在 graph 内联加载后传入。
-"""
+"""按 ``ResolvedConfig`` 组装 deep agent(平台托管:无 checkpointer / store)。"""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
 
 from deepagents import create_deep_agent
-from deepagents.backends import FilesystemBackend, LocalShellBackend
 from langchain.agents.middleware import AgentMiddleware
 
 from omniagent.config import Settings, get_settings
+from omniagent.memory import build_backend, memory_sources
 from omniagent.middleware import build_middleware
 from omniagent.model import build_model
 from omniagent.review import build_review_middleware
@@ -29,7 +25,7 @@ if TYPE_CHECKING:
     )
     from langchain_core.tools import BaseTool
 
-    from omniagent.modes import ResolvedConfig
+    from omniagent.resolve import ResolvedConfig
 
 AGENT_NAME = "openclound-omniagent"
 
@@ -39,10 +35,9 @@ def _tool_name(tool: BaseTool | dict[str, Any]) -> str | None:
 
 
 class ToolFilter(AgentMiddleware[Any, Any, Any]):
-    """从模型请求移除被裁剪的工具(``permission=deny`` / ``tools=false``)。
+    """请求层移除被裁剪的工具(``permission=deny`` / ``tools=false``)。
 
-    deepagents 无 per-agent 工具裁剪的公开参数(仅 HarnessProfile 级),故在请求层过滤;
-    须排在注入工具的中间件之后(builder 末尾追加)。
+    deepagents 无公开的工具裁剪参数,故在此过滤(须排在注入工具的中间件之后)。
     """
 
     def __init__(self, excluded: set[str]) -> None:
@@ -68,41 +63,35 @@ class ToolFilter(AgentMiddleware[Any, Any, Any]):
         return await handler(self._filter(request))
 
 
-def _backend(
-    resolved: ResolvedConfig, root: Path
-) -> FilesystemBackend | LocalShellBackend:
-    """``execute`` 未裁剪用跨平台 shell backend,否则纯文件 backend(均 ``virtual_mode``:
-    文件工具沙箱化到工作区,跨平台用 ``/`` 虚拟路径)。"""
-    if "execute" in resolved.excluded_tools:
-        return FilesystemBackend(root_dir=root, virtual_mode=True)
-    return LocalShellBackend(root_dir=root, virtual_mode=True, inherit_env=True)
-
-
 def build_agent(
     *,
     resolved: ResolvedConfig,
     workspace: str | Path,
     skill_sources: list[str],
+    agent: str,
     settings: Settings | None = None,
     tools: list[BaseTool] | None = None,
-    name: str = AGENT_NAME,
 ) -> Any:
-    """按 :class:`ResolvedConfig` 构建 deep agent(平台托管:无 checkpointer / store)。
+    """按 :class:`ResolvedConfig` 构建 deep agent(无 checkpointer / store,由平台注入)。
 
     Args:
-        resolved: 合并后的开关(模型 / 提示 / 工具裁剪 / HITL / 审核)。
-        workspace: 该 assistant 的 backend root(``tenant-<id>/assistant-<id>``,虚拟根)。
-        skill_sources: skill 虚拟源(如 ``["/skills"]``,无则 ``[]``)。
-        settings: 进程级配置;为空则取默认。
-        tools: 额外工具(如 :mod:`omniagent.graph` 加载的 MCP 工具)。
-        name: agent 名称。
+        resolved: 合并后的开关。
+        workspace: 该 assistant 的 backend root(``<base>/<agent>``)。
+        skill_sources: skill 虚拟源(如 ``["/skills"]``)。
+        agent: assistant 标识(记忆命名空间隔离)。
+        settings: 进程级运行参数;为空则取默认。
+        tools: 额外工具(如 MCP)。
     """
     settings = settings or get_settings()
-    root = init_workspace(workspace)
     model = build_model(
-        settings, model=resolved.model, temperature=resolved.temperature
+        model=resolved.model,
+        base_url=resolved.base_url,
+        api_key=resolved.api_key,
+        temperature=resolved.temperature,
+        model_params=resolved.model_params,
+        max_retries=settings.model_max_retries,
     )
-
+    root = init_workspace(workspace)
     middleware: list[AgentMiddleware[Any, Any, Any]] = [
         *build_middleware(resolved, settings, workspace_root=root),
         *build_review_middleware(resolved, model),
@@ -116,12 +105,13 @@ def build_agent(
         system_prompt=resolved.prompt,
         middleware=middleware,
         skills=skill_sources or None,
-        backend=_backend(resolved, root),
+        backend=build_backend(resolved, root, agent),
+        memory=memory_sources(resolved),
         interrupt_on=cast(
             "dict[str, bool | InterruptOnConfig] | None",
             resolved.interrupt_on or None,
         ),
-        checkpointer=None,  # 持久层由 Aegra 注入
+        checkpointer=None,
         store=None,
-        name=name,
+        name=AGENT_NAME,
     )

@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from langchain_core.language_models import BaseChatModel
     from langgraph.runtime import Runtime
 
-    from omniagent.modes import ResolvedConfig
+    from omniagent.resolve import ResolvedConfig
 
 
 class _RubricState(AgentState):

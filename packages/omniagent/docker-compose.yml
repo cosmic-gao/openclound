@@ -16,10 +16,16 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-omniagent}"]
+      # -h 127.0.0.1 强制 TCP:首次 initdb 的 socket-only 临时实例不会误报 ready
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-omniagent} -d ${POSTGRES_DB:-omniagent} -h 127.0.0.1",
+        ]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 30s
 
   redis:
     image: redis:7-alpine

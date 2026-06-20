@@ -1,4 +1,9 @@
-"""构造级冒烟测试:验证包可导入、各层可构建、agent 可编译,不真正调用模型。"""
+"""构造级冒烟测试:验证包可导入、各层可构建、agent 可编译,不真正调用模型。
+
+覆盖重构后形态:**单一配置驱动 deep agent**(无 mode);统一 langchain_openai 模型层
+(连接必填、无默认)、审核由 rubric 激活、跨会话记忆 opt-in、图缓存(cachetools + per-key
+锁 + skill 感知)、无租户(scope 仅 agent)、MCP 单 server 容错。
+"""
 
 from __future__ import annotations
 
@@ -6,27 +11,26 @@ import asyncio
 
 import pytest
 
+#: 测试用占位连接(无默认端点,连接必须显式分配)。
+_CONN = {"model": "m", "base_url": "https://x.test/v1", "api_key": "sk-x"}
+
 
 @pytest.fixture(autouse=True)
 def _env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:  # type: ignore[no-untyped-def]
-    """每个用例使用独立临时工作区与占位密钥,避免网络与污染 cwd;重置图缓存与锁。"""
+    """每个用例独立临时工作区;重置图缓存与 per-key 锁(每用例独立 event loop)。"""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("AGENT_WORKSPACE", str(tmp_path / "ws"))
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-placeholder")
-    for var in ("AGENT_MODEL", "OPENAI_BASE_URL"):
-        monkeypatch.delenv(var, raising=False)
-    # 清空工厂图缓存并重建锁(每个用例独立 event loop,锁不可跨 loop 复用)。
     import omniagent.graph as _graph
 
     _graph._CACHE.clear()
-    _graph._LOCK = asyncio.Lock()
+    _graph._LOCKS.clear()
 
 
 def _resolved(**cfg: object):  # type: ignore[no-untyped-def]
-    """便捷:把 opencode 风格 configurable 解析 + 合并为 ResolvedConfig。"""
+    """便捷:opencode 风格 configurable(默认带占位连接)→ ResolvedConfig。"""
     from omniagent import AgentConfig, get_settings, resolve
 
-    return resolve(AgentConfig.parse(cfg), get_settings())
+    return resolve(AgentConfig.parse({**_CONN, **cfg}), get_settings())
 
 
 # ————————————————————————— 包元数据 / 导出 —————————————————————————
@@ -39,7 +43,9 @@ def test_package_metadata() -> None:
     for name in (
         "build_agent",
         "build_model",
+        "build_backend",
         "build_middleware",
+        "memory_sources",
         "get_settings",
         "load_mcp_tools",
         "Settings",
@@ -49,39 +55,28 @@ def test_package_metadata() -> None:
         assert name in omniagent.__all__
 
 
-# ————————————————————————— 进程级 Settings —————————————————————————
+# ————————————————————————— 进程级 Settings(无连接) —————————————————————————
 
 
-def test_settings_defaults() -> None:
-    from omniagent import GATEWAY_BASE_URL, get_settings
+def test_settings_has_no_connection() -> None:
+    """连接(model/base_url/api_key)不再在 Settings —— 全部 per-assistant。"""
+    from omniagent import get_settings
 
     s = get_settings()
-    assert s.base_url == GATEWAY_BASE_URL
-    assert s.model == "claude-sonnet-4-6"
     assert s.pii_strategy == "off"
     assert s.enable_file_search is False
-    assert not hasattr(s, "service_key")  # ServiceKey 已移除
+    for removed in ("model", "base_url", "api_key", "temperature", "fallback_model"):
+        assert not hasattr(s, removed)
 
 
-def test_settings_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_settings_runtime_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     from omniagent import get_settings
 
-    monkeypatch.setenv("AGENT_MODEL", "gpt-5.1")
-    monkeypatch.setenv("AGENT_TEMPERATURE", "0.7")
+    monkeypatch.setenv("AGENT_TOOL_CALL_LIMIT", "50")
+    monkeypatch.setenv("AGENT_PII_STRATEGY", "mask")
     s = get_settings()
-    assert s.model == "gpt-5.1"
-    assert s.temperature == pytest.approx(0.7)
-
-
-def test_settings_reads_openai_connection(monkeypatch: pytest.MonkeyPatch) -> None:
-    """连接走标准 OPENAI_BASE_URL / OPENAI_API_KEY(可指向任意兼容端点)。"""
-    from omniagent import get_settings
-
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://api.minimaxi.com/v1")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mm")
-    s = get_settings()
-    assert s.base_url == "https://api.minimaxi.com/v1"
-    assert s.api_key == "sk-test-mm"
+    assert s.tool_call_limit == 50
+    assert s.pii_strategy == "mask"
 
 
 # ————————————————————————— per-agent AgentConfig —————————————————————————
@@ -91,119 +86,186 @@ def test_parse_agent_config_defaults() -> None:
     from omniagent import AgentConfig
 
     cfg = AgentConfig.parse({})
-    assert cfg.mode == "react"
     assert cfg.model is None
-    assert cfg.tools == {}
-    assert cfg.permission == {}
+    assert cfg.base_url is None
+    assert cfg.api_key is None
+    assert cfg.memory is False
     assert cfg.review.enabled is None
 
 
-def test_parse_agent_config_opencode_style() -> None:
+def test_parse_agent_config_full() -> None:
     from omniagent import AgentConfig
 
     cfg = AgentConfig.parse(
         {
-            "mode": "pipeline",
-            "model": "gpt-5.1",
-            "prompt": "scene",
+            "model": "gpt",
+            "base_url": "https://e.test/v1",
+            "api_key": "sk",
             "temperature": 0.3,
             "steps": 20,
             "tools": {"bash": False},
             "permission": {"edit": "ask"},
-            "review": {"enabled": True, "rubric": "must pass", "max_iterations": 5},
+            "review": {"enabled": True, "rubric": "x", "max_iterations": 5},
             "mcp": {"kb": {"transport": "streamable_http", "url": "http://x"}},
+            "memory": True,
         }
     )
-    assert cfg.mode == "pipeline"
-    assert cfg.model == "gpt-5.1"
+    assert cfg.base_url == "https://e.test/v1"
+    assert cfg.memory is True
     assert cfg.tools == {"bash": False}
     assert cfg.permission == {"edit": "ask"}
-    assert cfg.review.rubric == "must pass"
+    assert cfg.review.rubric == "x"
     assert cfg.review.max_iterations == 5
-    assert cfg.mcp["kb"]["url"] == "http://x"
-
-
-def test_parse_agent_config_ignores_scope_fields() -> None:
-    """configurable 里的 scope / 鉴权字段被忽略(extra=ignore),不影响解析。"""
-    from omniagent import AgentConfig
-
-    cfg = AgentConfig.parse(
-        {
-            "agent": "a1",
-            "user_id": "u",
-            "langgraph_auth_user": object(),
-            "mode": "pipeline",
-        }
-    )
-    assert cfg.mode == "pipeline"
 
 
 def test_parse_agent_config_tolerates_bad() -> None:
-    """字段类型错误时整体回退默认,不抛异常(容错)。"""
     from omniagent import AgentConfig
 
-    assert AgentConfig.parse({"tools": "not-a-dict"}).mode == "react"
+    assert AgentConfig.parse({"tools": "not-a-dict"}).tools == {}
 
 
-# ————————————————————————— modes:resolve —————————————————————————
+def test_parse_agent_config_ignores_scope_fields() -> None:
+    from omniagent import AgentConfig
+
+    cfg = AgentConfig.parse({"agent": "a1", "user_id": "u", "model": "m"})
+    assert cfg.model == "m"
 
 
-def test_resolve_react_defaults() -> None:
-    from omniagent.modes import REACT_PROMPT
+# ————————————————————————— resolve(配置驱动,无 mode) —————————————————————————
 
-    r = _resolved(mode="react")
-    assert r.mode == "react"
+
+def test_resolve_defaults() -> None:
+    from omniagent.resolve import DEFAULT_PROMPT
+
+    r = _resolved()
     assert r.review_enabled is False
-    assert r.prompt == REACT_PROMPT
+    assert r.prompt == DEFAULT_PROMPT
     assert r.excluded_tools == []
     assert r.interrupt_on == {}
+    assert r.memory is False
 
 
-def test_resolve_pipeline_enables_review() -> None:
-    r = _resolved(mode="pipeline", review={"rubric": "x"})
-    assert r.review_enabled is True
-    assert r.rubric == "x"
-    assert "RETRIEVE" in r.prompt  # pipeline 提示
+def test_review_activates_on_rubric() -> None:
+    """给 rubric → 自动开审核;没给 → 关;显式 enabled:false → 关。"""
+    assert _resolved(review={"rubric": "x"}).review_enabled is True
+    assert _resolved().review_enabled is False
+    assert _resolved(review={"rubric": "x", "enabled": False}).review_enabled is False
+
+
+def test_pipeline_prompt_opt_in() -> None:
+    """纪律提示按需注入 config.prompt(不再有 pipeline mode)。"""
+    from omniagent.resolve import PIPELINE_PROMPT
+
+    r = _resolved(prompt=PIPELINE_PROMPT)
+    assert "RETRIEVE" in r.prompt
 
 
 def test_resolve_tools_permission_to_excluded_interrupt() -> None:
     r = _resolved(tools={"bash": False}, permission={"edit": "ask", "write": "deny"})
-    assert "execute" in r.excluded_tools  # bash:false
-    assert "write_file" in r.excluded_tools  # write:deny
-    assert r.interrupt_on == {"edit_file": True}  # edit:ask
+    assert "execute" in r.excluded_tools
+    assert "write_file" in r.excluded_tools
+    assert r.interrupt_on == {"edit_file": True}
 
 
 def test_resolve_prompt_appends_user() -> None:
-    r = _resolved(mode="react", prompt="SCENE")
+    from omniagent.resolve import DEFAULT_PROMPT
+
+    r = _resolved(prompt="SCENE")
+    assert r.prompt.startswith(DEFAULT_PROMPT)
     assert r.prompt.endswith("SCENE")
 
 
-def test_resolve_model_temperature_override() -> None:
-    r = _resolved(model="m2", temperature=0.9)
+def test_resolve_passes_connection() -> None:
+    r = _resolved(
+        model="m2",
+        base_url="https://y.test/v1",
+        api_key="sk-y",
+        temperature=0.9,
+        memory=True,
+    )
     assert r.model == "m2"
+    assert r.base_url == "https://y.test/v1"
+    assert r.api_key == "sk-y"
     assert r.temperature == pytest.approx(0.9)
+    assert r.memory is True
 
 
-# ————————————————————————— 模型 —————————————————————————
+# ————————————————————————— 模型(统一 langchain_openai,无默认) —————————————————————————
 
 
-def test_build_model_targets_gateway() -> None:
+def test_build_model_requires_connection() -> None:
+    from omniagent import build_model
+
+    with pytest.raises(ValueError, match="model"):
+        build_model(model=None, base_url="https://x.test/v1", api_key="sk")
+    with pytest.raises(ValueError, match="base_url"):
+        build_model(model="m", base_url=None, api_key="sk")
+    with pytest.raises(ValueError, match="api_key"):
+        build_model(model="m", base_url="https://x.test/v1", api_key=None)
+
+
+def test_build_model_constructs() -> None:
     from langchain_openai import ChatOpenAI
 
-    from omniagent import build_model, get_settings
+    from omniagent import build_model
 
-    s = get_settings()
-    model = build_model(s)
-    assert isinstance(model, ChatOpenAI)
-    assert model.model_name == s.model
-    assert str(model.openai_api_base) == s.base_url
+    m = build_model(model="m", base_url="https://x.test/v1", api_key="sk-z")
+    assert isinstance(m, ChatOpenAI)
+    assert m.model_name == "m"
+    assert str(m.openai_api_base) == "https://x.test/v1"
+    assert m.openai_api_key.get_secret_value() == "sk-z"
 
 
-def test_build_model_temperature_override() -> None:
-    from omniagent import build_model, get_settings
+def test_build_model_temperature_and_params() -> None:
+    from omniagent import build_model
 
-    model = build_model(get_settings(), temperature=0.42)
-    assert model.temperature == pytest.approx(0.42)
+    m = build_model(
+        model="m",
+        base_url="https://x.test/v1",
+        api_key="sk",
+        temperature=0.42,
+        model_params={"top_p": 0.9},
+    )
+    assert m.temperature == pytest.approx(0.42)
+    assert m.top_p == pytest.approx(0.9)
+
+
+# ————————————————————————— 记忆(opt-in)/ backend —————————————————————————
+
+
+def test_build_backend_local_without_memory(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from deepagents.backends import (
+        CompositeBackend,
+        FilesystemBackend,
+        LocalShellBackend,
+    )
+
+    from omniagent.memory import build_backend
+
+    b = build_backend(_resolved(memory=False), tmp_path, "a1")
+    assert isinstance(b, LocalShellBackend)
+    assert not isinstance(b, CompositeBackend)
+    # execute 裁剪 → 纯文件 backend(无 execute)
+    b2 = build_backend(_resolved(memory=False, tools={"bash": False}), tmp_path, "a1")
+    assert isinstance(b2, FilesystemBackend)
+    assert not isinstance(b2, LocalShellBackend)
+
+
+def test_build_backend_composite_with_memory(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from deepagents.backends import CompositeBackend
+
+    from omniagent.memory import MEMORY_ROUTE, build_backend
+
+    b = build_backend(_resolved(memory=True), tmp_path, "a1")
+    assert isinstance(b, CompositeBackend)
+    assert MEMORY_ROUTE in b.routes
+
+
+def test_memory_sources() -> None:
+    from omniagent.memory import MEMORY_FILE, memory_sources
+
+    assert memory_sources(_resolved(memory=True)) == [MEMORY_FILE]
+    assert memory_sources(_resolved(memory=False)) is None
 
 
 # ————————————————————————— 中间件 / 审核 —————————————————————————
@@ -219,11 +281,15 @@ def test_build_middleware_default() -> None:
     assert "ContextEditingMiddleware" in names
 
 
-def test_build_middleware_steps_limit() -> None:
+def test_build_middleware_steps_and_fallback() -> None:
     from omniagent import build_middleware, get_settings
 
-    mw = build_middleware(_resolved(steps=30), get_settings(), workspace_root=".")
-    assert "ModelCallLimitMiddleware" in {type(m).__name__ for m in mw}
+    mw = build_middleware(
+        _resolved(steps=30, fallback_model="fb"), get_settings(), workspace_root="."
+    )
+    names = {type(m).__name__ for m in mw}
+    assert "ModelCallLimitMiddleware" in names
+    assert "ModelFallbackMiddleware" in names
 
 
 def test_rubric_seed_middleware_injects() -> None:
@@ -237,32 +303,58 @@ def test_rubric_seed_middleware_injects() -> None:
 def test_build_review_middleware() -> None:
     from deepagents.middleware.rubric import RubricMiddleware
 
-    from omniagent import build_model, get_settings
+    from omniagent import build_model
     from omniagent.review import RubricSeedMiddleware, build_review_middleware
 
-    model = build_model(get_settings())
-    pipe = build_review_middleware(
-        _resolved(mode="pipeline", review={"rubric": "x"}), model
-    )
+    model = build_model(model="m", base_url="https://x.test/v1", api_key="sk")
+    pipe = build_review_middleware(_resolved(review={"rubric": "x"}), model)
     assert [type(m) for m in pipe] == [RubricSeedMiddleware, RubricMiddleware]
-    assert build_review_middleware(_resolved(mode="react"), model) == []  # 无审核
-    assert build_review_middleware(_resolved(mode="pipeline"), model) == []  # 缺 rubric
+    assert build_review_middleware(_resolved(), model) == []  # 无 rubric
+    assert build_review_middleware(_resolved(review={"enabled": True}), model) == []
 
 
-# ————————————————————————— 工作区 / MCP —————————————————————————
+# ————————————————————————— 工作区 / skill —————————————————————————
 
 
-def test_init_workspace_mkdir() -> None:
-    from omniagent import get_settings, init_workspace
+def test_agent_root_no_tenant(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """backend root = <base>/<agent>(无 tenant 层)。"""
+    from omniagent.config import resolve_path
+    from omniagent.workspace import agent_root
 
-    root = init_workspace(get_settings().workspace)
-    assert root.is_dir()
+    root = agent_root(tmp_path, "a1")
+    assert root == resolve_path(tmp_path) / "a1"
+
+
+def test_skill_sources_and_signature(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from omniagent import save_skill
+    from omniagent.workspace import skill_signature, skill_sources
+
+    root = tmp_path / "agent"
+    assert skill_sources(root) == []
+    assert skill_signature(root) == ""
+    save_skill(root, "demo", {"SKILL.md": "---\nname: demo\ndescription: d\n---\n"})
+    assert skill_sources(root) == ["/skills"]
+    sig1 = skill_signature(root)
+    assert "demo" in sig1
+    # 增 skill → 签名变化(触发图重建)
+    save_skill(root, "more", {"SKILL.md": "---\nname: more\ndescription: d\n---\n"})
+    assert skill_signature(root) != sig1
 
 
 def test_load_mcp_tools_empty() -> None:
     from omniagent import load_mcp_tools
 
     assert asyncio.run(load_mcp_tools({})) == []
+
+
+def test_load_mcp_tools_fault_isolation() -> None:
+    """单个不可达 / 坏 server 不抛异常,仅跳过(返回可用子集)。"""
+    from omniagent import load_mcp_tools
+
+    servers = {
+        "bad": {"transport": "stdio", "command": "nonexistent_cmd_xyz", "args": []}
+    }
+    assert asyncio.run(load_mcp_tools(servers)) == []
 
 
 # ————————————————————————— agent 组装(builder) —————————————————————————
@@ -275,6 +367,7 @@ def test_build_agent_constructs(tmp_path) -> None:  # type: ignore[no-untyped-de
         resolved=_resolved(),
         workspace=str(tmp_path / "ws"),
         skill_sources=[],
+        agent="a1",
     )
     assert hasattr(agent, "invoke")
     assert hasattr(agent, "astream")
@@ -284,13 +377,13 @@ def test_build_agent_constructs(tmp_path) -> None:  # type: ignore[no-untyped-de
 
 
 def test_build_agent_exposes_default_tools(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    """默认(react)有跨平台 execute + 文件工具。"""
     from omniagent import build_agent
 
     agent = build_agent(
         resolved=_resolved(),
         workspace=str(tmp_path / "ws"),
         skill_sources=[],
+        agent="a1",
     )
     registered = {
         t.name
@@ -300,20 +393,7 @@ def test_build_agent_exposes_default_tools(tmp_path) -> None:  # type: ignore[no
     assert {"read_file", "write_file", "edit_file", "glob", "grep"} <= registered
 
 
-def test_backend_selection_by_execute(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    """execute 未裁剪 → LocalShellBackend;裁剪(bash:false)→ FilesystemBackend。"""
-    from deepagents.backends import FilesystemBackend, LocalShellBackend
-
-    from omniagent.builder import _backend
-
-    assert isinstance(_backend(_resolved(), tmp_path), LocalShellBackend)
-    nb = _backend(_resolved(tools={"bash": False}), tmp_path)
-    assert isinstance(nb, FilesystemBackend)
-    assert not isinstance(nb, LocalShellBackend)
-
-
 def test_tool_filter() -> None:
-    """ToolFilter 从模型请求移除被裁剪的工具。"""
     from omniagent.builder import ToolFilter, _tool_name
 
     assert _tool_name({"name": "write_file"}) == "write_file"
@@ -338,107 +418,94 @@ def test_graph_factory_async() -> None:
     """omniagent.graph:graph 是 async 工厂,产出无 checkpointer 的平台托管图。"""
     from omniagent.graph import graph
 
-    g = asyncio.run(graph())
+    g = asyncio.run(graph({"configurable": dict(_CONN)}))
     assert hasattr(g, "invoke")
     assert hasattr(g, "astream")
     assert g.checkpointer is None  # Aegra 注入 Postgres 持久化
 
 
 def test_graph_resolve_scope() -> None:
-    """工厂图按 (tenant, agent) 解析;无鉴权时回退 configurable。"""
+    """工厂图 scope 仅 agent(无租户);缺省回退 default。"""
     from omniagent.graph import _resolve_scope
 
-    cfg = {"configurable": {"tenant": "t1", "agent": "a1"}}
-    assert _resolve_scope(cfg) == ("t1", "a1")
+    assert _resolve_scope({"configurable": {"agent": "a1"}}) == "a1"
+    assert _resolve_scope({}) == "default"
+    assert _resolve_scope({"agent": "a2"}) == "a2"
 
 
 def test_graph_rejects_bad_agent() -> None:
-    """工厂图对穿越式 agent 直接拒绝(防写到别处)。"""
+    """工厂图对穿越式 agent 直接拒绝。"""
     from omniagent.graph import graph
 
-    with pytest.raises(ValueError):  # noqa: PT011
-        asyncio.run(graph({"configurable": {"agent": "../escape"}}))
+    with pytest.raises(ValueError):
+        asyncio.run(graph({"configurable": {"agent": "../escape", **_CONN}}))
 
 
 def test_graph_caches_per_scope_and_config() -> None:
-    """同 (tenant,agent,指纹) 复用;不同 agent/租户/mode 独立;user 不影响图。"""
+    """同 (agent,指纹) 复用;不同 agent / 审核配置独立。"""
     from omniagent.graph import graph
 
-    base = {"tenant": "t1", "agent": "a1"}
+    base = {"agent": "a1", **_CONN}
 
     async def run() -> tuple[object, ...]:
-        g1 = await graph({"configurable": base})
+        g1 = await graph({"configurable": dict(base)})
         same = await graph({"configurable": dict(base)})
-        same_user = await graph({"configurable": {**base, "user_id": "anyone"}})
         diff_agent = await graph({"configurable": {**base, "agent": "a2"}})
-        diff_tenant = await graph({"configurable": {**base, "tenant": "t2"}})
-        diff_mode = await graph(
-            {"configurable": {**base, "mode": "pipeline", "review": {"rubric": "x"}}}
-        )
-        return g1, same, same_user, diff_agent, diff_tenant, diff_mode
+        diff_review = await graph({"configurable": {**base, "review": {"rubric": "x"}}})
+        return g1, same, diff_agent, diff_review
 
-    g1, same, same_user, diff_agent, diff_tenant, diff_mode = asyncio.run(run())
+    g1, same, diff_agent, diff_review = asyncio.run(run())
     assert same is g1
-    assert same_user is g1  # 用户不影响图(会话由 Aegra 按用户隔离)
     assert diff_agent is not g1
-    assert diff_tenant is not g1
-    assert diff_mode is not g1
+    assert diff_review is not g1
 
 
-def test_resolve_scope_from_auth_user() -> None:
-    """鉴权 ``User``:tenant→tenant;客户端 configurable.tenant 不可伪造。"""
-    auth = pytest.importorskip("aegra_api.models.auth")
-    user_cls = auth.User
-    from omniagent.graph import _resolve_scope
+def test_graph_rebuilds_on_skill_change() -> None:
+    """新增 skill 改变指纹 → 重建(非同一图)。"""
+    from omniagent import get_settings, save_skill
+    from omniagent.graph import graph
+    from omniagent.workspace import agent_root
 
-    def scope(user: object, **extra: object) -> tuple[str, str]:
-        cfg = {"configurable": {"agent": "a1", "langgraph_auth_user": user, **extra}}
-        return _resolve_scope(cfg)
+    base = {"agent": "a1", **_CONN}
 
-    assert scope(user_cls(identity="alice", tenant="acme")) == ("acme", "a1")
-    assert scope(user_cls(identity="bob"))[0] == "public"  # 无 tenant -> public
-    # 防伪造:有鉴权身份时,客户端 configurable.tenant 被忽略
-    assert scope(user_cls(identity="real", tenant="realt"), tenant="y")[0] == "realt"
+    async def run() -> tuple[object, object]:
+        g1 = await graph({"configurable": dict(base)})
+        root = agent_root(get_settings().workspace, "a1")
+        save_skill(root, "s", {"SKILL.md": "---\nname: s\ndescription: d\n---\n"})
+        g2 = await graph({"configurable": dict(base)})
+        return g1, g2
+
+    g1, g2 = asyncio.run(run())
+    assert g2 is not g1
 
 
-# ————————————————————————— auth(内网,无 ServiceKey) —————————————————————————
+def test_flat_config_without_configurable() -> None:
+    """扁平 config(无 configurable 包裹)等价于 config.configurable。"""
+    from omniagent.graph import _configurable, _resolve_scope
+
+    assert _resolve_scope({"agent": "a1"}) == "a1"
+    assert _configurable({"model": "m"})["model"] == "m"
+    # configurable 优先(承载运行时注入)
+    merged = _configurable({"model": "a", "configurable": {"model": "b"}})
+    assert merged["model"] == "b"
+
+
+# ————————————————————————— auth(内网,identity-only) —————————————————————————
 
 
 def test_auth_resolve_identity() -> None:
-    """内网信任:直接读 X-User-Id / X-Tenant-Id;缺失回退匿名 public。"""
+    """内网信任:读 X-User-Id 为 identity;无租户维度。"""
     from omniagent.auth import resolve_identity
 
-    out = resolve_identity({"x-user-id": "alice", "x-tenant-id": "acme"})
-    assert out == {"identity": "alice", "tenant": "acme"}
-    assert resolve_identity({}) == {"identity": "anonymous", "tenant": "public"}
+    assert resolve_identity({"x-user-id": "alice"}) == {"identity": "alice"}
+    assert resolve_identity({}) == {"identity": "anonymous"}
+    assert "tenant" not in resolve_identity({"x-user-id": "a", "x-tenant-id": "t"})
 
 
-# ————————————————————————— skill / 多租户 —————————————————————————
-
-
-def test_skill_sources(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    """agent root 下有 skill 时返回 ``["/skills"]``,否则 ``[]``。"""
-    from omniagent import save_skill
-    from omniagent.workspace import skill_sources
-
-    root = tmp_path / "agent"
-    assert skill_sources(root) == []  # 无 skill
-    save_skill(root, "demo", {"SKILL.md": "---\nname: demo\ndescription: d\n---\n"})
-    assert skill_sources(root) == ["/skills"]
-    assert (root / "skills" / "demo" / "SKILL.md").is_file()
-
-
-def test_agent_root(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    """backend root = <base>/tenant-<id>/assistant-<id>(前缀自描述)。"""
-    from omniagent.workspace import agent_root
-
-    root = agent_root(tmp_path, "acme", "acme-chat")
-    assert root.name == "assistant-acme-chat"
-    assert root.parent.name == "tenant-acme"
+# ————————————————————————— skill CRUD / 安全 —————————————————————————
 
 
 def test_skill_crud(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    """save / list / delete per-agent skill(含多文件脚本)。"""
     from omniagent import delete_skill, list_skills, save_skill
 
     root = tmp_path / "agent"
@@ -456,11 +523,11 @@ def test_skill_crud(tmp_path) -> None:  # type: ignore[no-untyped-def]
 def test_skill_rejects_traversal(tmp_path) -> None:  # type: ignore[no-untyped-def]
     from omniagent import save_skill
 
-    with pytest.raises(ValueError):  # noqa: PT011 - 名称穿越
+    with pytest.raises(ValueError):
         save_skill(tmp_path, "../evil", {"SKILL.md": "x"})
-    with pytest.raises(ValueError):  # noqa: PT011 - 文件路径穿越
+    with pytest.raises(ValueError):
         save_skill(tmp_path, "ok", {"../evil.py": "x"})
-    with pytest.raises(ValueError):  # noqa: PT011 - 缺 SKILL.md
+    with pytest.raises(ValueError):
         save_skill(tmp_path, "ok", {"a.txt": "x"})
 
 
@@ -469,12 +536,11 @@ def test_safe_segment_rejects_traversal() -> None:
 
     assert safe_segment("ok") == "ok"
     for bad in ("", ".", "..", "a/b", "a\\b"):
-        with pytest.raises(ValueError):  # noqa: PT011
+        with pytest.raises(ValueError):
             safe_segment(bad)
 
 
 def test_purge_agent(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    """purge 删该 agent 的整个 backend root(skill + 运行期文件)。"""
     from omniagent import purge_agent, save_skill
 
     root = tmp_path / "agent"
@@ -482,11 +548,11 @@ def test_purge_agent(tmp_path) -> None:  # type: ignore[no-untyped-def]
     (root / "notes.txt").write_text("scratch", encoding="utf-8")
     assert purge_agent(root) is True
     assert not root.exists()
-    assert purge_agent(root) is False  # 已不存在
+    assert purge_agent(root) is False
 
 
 def test_http_routes() -> None:
-    """skill CRUD + agent 清理路由;agent 记录用 Aegra 原生 /assistants。"""
+    """skill CRUD + agent 清理路由(按 agent 单维)。"""
     pytest.importorskip("fastapi")
     pytest.importorskip("aegra_api")
     from omniagent.http import app

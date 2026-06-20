@@ -1,70 +1,69 @@
-"""Aegra 部署入口:async 工厂图,按 ``(tenant, agent, 配置)`` 装配并缓存编译图。
+"""Aegra 部署入口:async 工厂图,按 ``(agent, 配置 + skill 指纹)`` 装配并缓存编译图。
 
-Aegra 通过 ``aegra.json`` 的 ``graphs`` 注册本模块的 :func:`graph`,识别为 config 工厂、
-每请求 ``await`` 调用。assistant backend root = ``<base>/tenant-<id>/assistant-<id>``
-(skill 在其下 ``/skills``);同一 assistant 的用户共享该图与文件区,会话历史由 Aegra 按用户
-私有。``tenant`` 只取自 ``langgraph_auth_user``(防伪造),无鉴权才回退 ``configurable``。
-持久化由 Aegra 注入,故不带 checkpointer / store。
+每请求 ``await`` 调用;图不带 checkpointer / store(平台注入)。无租户:scope 仅 agent,
+backend root = ``<workspace>/<agent>``,会话历史由 Aegra 按用户私有。
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections import OrderedDict
 from typing import Any
+from weakref import WeakValueDictionary
+
+from cachetools import TTLCache
 
 from omniagent.builder import build_agent
 from omniagent.config import AgentConfig, get_settings, safe_segment
 from omniagent.mcp import load_mcp_tools
-from omniagent.modes import fingerprint, resolve
-from omniagent.workspace import agent_root, skill_sources
+from omniagent.resolve import fingerprint, resolve
+from omniagent.workspace import agent_root, skill_signature, skill_sources
 
-#: 编译图缓存(键 = ``(tenant, agent, 配置指纹)``);async 构建含 ``await``,故手写
-#: ``OrderedDict`` + 锁(FIFO 淘汰),替代不支持协程的 ``lru_cache``。
-_CACHE: OrderedDict[tuple[str, str, str], Any] = OrderedDict()
-_CACHE_MAX = 256
-_LOCK = asyncio.Lock()
+#: 编译图缓存(键 = (agent, 指纹);LRU + TTL)。指纹含 skill 签名,故 skill 增删触发重建。
+_CACHE: TTLCache[tuple[str, str], Any] = TTLCache(maxsize=256, ttl=3600)
+#: per-key 锁(singleflight):同 key 并发构建去重,不同 agent 冷启动互不阻塞。
+_LOCKS: WeakValueDictionary[tuple[str, str], asyncio.Lock] = WeakValueDictionary()
 
 
-def _resolve_scope(config: dict[str, Any] | None) -> tuple[str, str]:
-    """解析 ``(tenant, agent)`` 并校验路径段。"""
-    cfg = (config or {}).get("configurable") or {}
-    auth_user = cfg.get("langgraph_auth_user")
-    tenant = (
-        getattr(auth_user, "tenant", None) if auth_user else cfg.get("tenant")
-    ) or "public"
-    agent = cfg.get("agent") or "default"
-    return safe_segment(str(tenant)), safe_segment(str(agent))
+def _configurable(config: dict[str, Any] | None) -> dict[str, Any]:
+    """兼容标准 ``config.configurable`` 与扁平 ``config`` 顶层(后者运行时注入优先)。"""
+    config = config or {}
+    return {**config, **(config.get("configurable") or {})}
+
+
+def _resolve_scope(config: dict[str, Any] | None) -> str:
+    """解析并校验 ``agent``(无租户)。"""
+    agent = _configurable(config).get("agent") or "default"
+    return safe_segment(str(agent))
+
+
+def _lock_for(key: tuple[str, str]) -> asyncio.Lock:
+    lock = _LOCKS.get(key)
+    if lock is None:
+        lock = _LOCKS.setdefault(key, asyncio.Lock())
+    return lock
 
 
 async def graph(config: dict[str, Any] | None = None) -> Any:
-    """Aegra 按请求 async 图工厂。
-
-    Args:
-        config: run 配置;``configurable`` 带鉴权用户与开关。本地直调可省略
-            (回退 ``public/default`` + react)。
-    """
-    tenant, agent = _resolve_scope(config)
+    """Aegra 按请求 async 图工厂(按 agent + 配置 / skill 指纹缓存)。"""
+    agent = _resolve_scope(config)
     settings = get_settings()
-    resolved = resolve(AgentConfig.parse((config or {}).get("configurable")), settings)
-    key = (tenant, agent, fingerprint(resolved))
+    resolved = resolve(AgentConfig.parse(_configurable(config)), settings)
+    root = agent_root(settings.workspace, agent)
+    key = (agent, fingerprint(resolved, skill_signature(root)))
 
     if (cached := _CACHE.get(key)) is not None:
         return cached
-
-    async with _LOCK:
-        if (cached := _CACHE.get(key)) is not None:  # 双重检查:等锁期间或已建好
+    async with _lock_for(key):
+        if (cached := _CACHE.get(key)) is not None:  # 双检:等锁期间可能已建好
             return cached
-        root = agent_root(settings.workspace, tenant, agent)
         tools = await load_mcp_tools(resolved.mcp_servers)
         built = build_agent(
             resolved=resolved,
             workspace=str(root),
             skill_sources=skill_sources(root),
+            agent=agent,
             settings=settings,
             tools=tools,
         )
         _CACHE[key] = built
-        if len(_CACHE) > _CACHE_MAX:
-            _CACHE.popitem(last=False)  # FIFO 淘汰最旧
         return built

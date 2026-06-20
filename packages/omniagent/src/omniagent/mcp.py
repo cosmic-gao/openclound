@@ -1,14 +1,13 @@
-"""MCP 工具加载:把 MCP server 暴露的工具加载为 LangChain 工具。
+"""加载 MCP server 工具(逐 server 容错)。
 
-基于 ``langchain-mcp-adapters`` 的 ``MultiServerMCPClient``,加载结果可直接传给
-:func:`omniagent.builder.build_agent` 的 ``tools`` 参数,或经由
-:func:`omniagent.builder.build_async_agent` 的 ``mcp_servers`` 参数自动加载。
-
-MCP 连接是异步的,因此本模块的入口为 ``async``。
+基于 ``langchain-mcp-adapters``;其工具每次调用新建临时会话(无需关闭),但多 server 加载
+无异常隔离,故本模块逐 server 加载:失败仅记 warning 跳过,不拖垮其余工具。
 """
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import TYPE_CHECKING, Any, cast
 
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -16,31 +15,24 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
 
+logger = logging.getLogger(__name__)
+
 
 async def load_mcp_tools(servers: dict[str, dict[str, Any]]) -> list[BaseTool]:
-    """从一组 MCP server 异步加载工具。
-
-    Args:
-        servers: ``MultiServerMCPClient`` 的连接配置,键为 server 名,值为连接
-            参数。例如::
-
-                {
-                    "weather": {
-                        "transport": "streamable_http",
-                        "url": "http://localhost:8000/mcp",
-                    },
-                    "fs": {
-                        "transport": "stdio",
-                        "command": "python",
-                        "args": ["server.py"],
-                    },
-                }
-
-    Returns:
-        可直接交给 agent 的 LangChain 工具列表;``servers`` 为空时返回空列表。
-    """
+    """逐 server 异步加载 MCP 工具,单 server 失败仅跳过;工具名以 server 名为前缀。"""
     if not servers:
         return []
 
     client = MultiServerMCPClient(cast("Any", servers), tool_name_prefix=True)
-    return await client.get_tools()
+    names = list(servers)
+    results = await asyncio.gather(
+        *(client.get_tools(server_name=name) for name in names),
+        return_exceptions=True,
+    )
+    tools: list[BaseTool] = []
+    for name, result in zip(names, results, strict=True):
+        if isinstance(result, BaseException):
+            logger.warning("MCP server %r failed to load, skipping: %s", name, result)
+            continue
+        tools.extend(result)
+    return tools
