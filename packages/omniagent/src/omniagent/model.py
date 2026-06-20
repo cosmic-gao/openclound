@@ -33,7 +33,7 @@ def build_model(
     if missing:
         msg = f"assistant must assign {' + '.join(missing)} (no defaults)"
         raise ValueError(msg)
-    assert model is not None and base_url is not None and api_key is not None  # noqa: S101
+    assert model is not None and base_url is not None and api_key is not None
 
     kwargs: dict[str, Any] = {
         "model": model,

@@ -34,9 +34,9 @@ PIPELINE_PROMPT = (
 )
 
 
-@dataclass
+@dataclass(frozen=True)
 class ResolvedConfig:
-    """合并后的最终开关,供 :func:`omniagent.builder.build_agent` 消费。"""
+    """合并后的最终开关(只读),供 :func:`omniagent.builder.build_agent` 消费。"""
 
     model: str | None
     base_url: str | None

@@ -431,6 +431,9 @@ def test_graph_resolve_scope() -> None:
     assert _resolve_scope({"configurable": {"agent": "a1"}}) == "a1"
     assert _resolve_scope({}) == "default"
     assert _resolve_scope({"agent": "a2"}) == "a2"
+    # 缺 agent 回退平台 assistant_id(避免多 assistant 撞 "default");agent 优先
+    assert _resolve_scope({"configurable": {"assistant_id": "asst_x"}}) == "asst_x"
+    assert _resolve_scope({"agent": "a", "assistant_id": "x"}) == "a"
 
 
 def test_graph_rejects_bad_agent() -> None:

@@ -31,8 +31,9 @@ def _configurable(config: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def _resolve_scope(config: dict[str, Any] | None) -> str:
-    """解析并校验 ``agent``(无租户)。"""
-    agent = _configurable(config).get("agent") or "default"
+    """解析并校验 ``agent``;缺省回退 ``assistant_id``,再回退 ``default``。"""
+    cfg = _configurable(config)
+    agent = cfg.get("agent") or cfg.get("assistant_id") or "default"
     return safe_segment(str(agent))
 
 
