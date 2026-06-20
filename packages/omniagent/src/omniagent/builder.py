@@ -71,17 +71,18 @@ class ToolFilter(AgentMiddleware[Any, Any, Any]):
 def _backend(
     resolved: ResolvedConfig, root: Path
 ) -> FilesystemBackend | LocalShellBackend:
-    """``execute`` 未裁剪用跨平台 shell backend,否则纯文件 backend。"""
+    """``execute`` 未裁剪用跨平台 shell backend,否则纯文件 backend(均 ``virtual_mode``:
+    文件工具沙箱化到工作区,跨平台用 ``/`` 虚拟路径)。"""
     if "execute" in resolved.excluded_tools:
-        return FilesystemBackend(root_dir=root, virtual_mode=False)
-    return LocalShellBackend(root_dir=root, virtual_mode=False, inherit_env=True)
+        return FilesystemBackend(root_dir=root, virtual_mode=True)
+    return LocalShellBackend(root_dir=root, virtual_mode=True, inherit_env=True)
 
 
 def build_agent(
     *,
     resolved: ResolvedConfig,
-    skill_sources: list[str],
     workspace: str | Path,
+    skill_sources: list[str],
     settings: Settings | None = None,
     tools: list[BaseTool] | None = None,
     name: str = AGENT_NAME,
@@ -90,8 +91,8 @@ def build_agent(
 
     Args:
         resolved: 合并后的开关(模型 / 提示 / 工具裁剪 / HITL / 审核)。
-        skill_sources: skill 源路径(``<tenant>/<agent>`` 绝对 POSIX)。
-        workspace: 该 (租户, 用户, agent) 的工作目录。
+        workspace: 该 assistant 的 backend root(``tenant-<id>/assistant-<id>``,虚拟根)。
+        skill_sources: skill 虚拟源(如 ``["/skills"]``,无则 ``[]``)。
         settings: 进程级配置;为空则取默认。
         tools: 额外工具(如 :mod:`omniagent.graph` 加载的 MCP 工具)。
         name: agent 名称。

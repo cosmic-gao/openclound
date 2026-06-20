@@ -12,7 +12,6 @@ def _env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:  # type: ignore[no-
     """每个用例使用独立临时工作区与占位密钥,避免网络与污染 cwd;重置图缓存与锁。"""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("AGENT_WORKSPACE", str(tmp_path / "ws"))
-    monkeypatch.setenv("AGENT_SKILLS_ROOT", str(tmp_path / "skills"))
     monkeypatch.setenv("OPENAI_API_KEY", "sk-placeholder")
     for var in ("AGENT_MODEL", "OPENAI_BASE_URL"):
         monkeypatch.delenv(var, raising=False)
@@ -273,7 +272,9 @@ def test_build_agent_constructs(tmp_path) -> None:  # type: ignore[no-untyped-de
     from omniagent import build_agent
 
     agent = build_agent(
-        resolved=_resolved(), skill_sources=[], workspace=str(tmp_path / "ws")
+        resolved=_resolved(),
+        workspace=str(tmp_path / "ws"),
+        skill_sources=[],
     )
     assert hasattr(agent, "invoke")
     assert hasattr(agent, "astream")
@@ -287,7 +288,9 @@ def test_build_agent_exposes_default_tools(tmp_path) -> None:  # type: ignore[no
     from omniagent import build_agent
 
     agent = build_agent(
-        resolved=_resolved(), skill_sources=[], workspace=str(tmp_path / "ws")
+        resolved=_resolved(),
+        workspace=str(tmp_path / "ws"),
+        skill_sources=[],
     )
     registered = {
         t.name
@@ -342,11 +345,11 @@ def test_graph_factory_async() -> None:
 
 
 def test_graph_resolve_scope() -> None:
-    """工厂图按 (user, tenant, agent) 解析;无鉴权时回退 configurable。"""
+    """工厂图按 (tenant, agent) 解析;无鉴权时回退 configurable。"""
     from omniagent.graph import _resolve_scope
 
-    cfg = {"configurable": {"user_id": "u1", "tenant": "t1", "agent": "a1"}}
-    assert _resolve_scope(cfg) == ("u1", "t1", "a1")
+    cfg = {"configurable": {"tenant": "t1", "agent": "a1"}}
+    assert _resolve_scope(cfg) == ("t1", "a1")
 
 
 def test_graph_rejects_bad_agent() -> None:
@@ -358,45 +361,44 @@ def test_graph_rejects_bad_agent() -> None:
 
 
 def test_graph_caches_per_scope_and_config() -> None:
-    """同 (scope, 配置指纹) 复用图;不同 agent / 用户 / 租户 / mode 各自独立。"""
+    """同 (tenant,agent,指纹) 复用;不同 agent/租户/mode 独立;user 不影响图。"""
     from omniagent.graph import graph
 
-    base = {"user_id": "u1", "tenant": "t1", "agent": "a1"}
+    base = {"tenant": "t1", "agent": "a1"}
 
     async def run() -> tuple[object, ...]:
         g1 = await graph({"configurable": base})
         same = await graph({"configurable": dict(base)})
+        same_user = await graph({"configurable": {**base, "user_id": "anyone"}})
         diff_agent = await graph({"configurable": {**base, "agent": "a2"}})
-        diff_user = await graph({"configurable": {**base, "user_id": "u2"}})
         diff_tenant = await graph({"configurable": {**base, "tenant": "t2"}})
         diff_mode = await graph(
             {"configurable": {**base, "mode": "pipeline", "review": {"rubric": "x"}}}
         )
-        return g1, same, diff_agent, diff_user, diff_tenant, diff_mode
+        return g1, same, same_user, diff_agent, diff_tenant, diff_mode
 
-    g1, same, diff_agent, diff_user, diff_tenant, diff_mode = asyncio.run(run())
+    g1, same, same_user, diff_agent, diff_tenant, diff_mode = asyncio.run(run())
     assert same is g1
+    assert same_user is g1  # 用户不影响图(会话由 Aegra 按用户隔离)
     assert diff_agent is not g1
-    assert diff_user is not g1
     assert diff_tenant is not g1
     assert diff_mode is not g1
 
 
 def test_resolve_scope_from_auth_user() -> None:
-    """鉴权 ``User``:identity→user、tenant→tenant;客户端 configurable 不可伪造。"""
+    """鉴权 ``User``:tenant→tenant;客户端 configurable.tenant 不可伪造。"""
     auth = pytest.importorskip("aegra_api.models.auth")
     user_cls = auth.User
     from omniagent.graph import _resolve_scope
 
-    def scope(user: object, **extra: object) -> tuple[str, str, str]:
+    def scope(user: object, **extra: object) -> tuple[str, str]:
         cfg = {"configurable": {"agent": "a1", "langgraph_auth_user": user, **extra}}
         return _resolve_scope(cfg)
 
-    assert scope(user_cls(identity="alice", tenant="acme")) == ("alice", "acme", "a1")
-    assert scope(user_cls(identity="bob"))[1] == "public"  # 无 tenant -> public
-    # 防伪造:有鉴权身份时,客户端 configurable.user_id / tenant 被忽略
-    u, t, _a = scope(user_cls(identity="real", tenant="realt"), user_id="x", tenant="y")
-    assert (u, t) == ("real", "realt")
+    assert scope(user_cls(identity="alice", tenant="acme")) == ("acme", "a1")
+    assert scope(user_cls(identity="bob"))[0] == "public"  # 无 tenant -> public
+    # 防伪造:有鉴权身份时,客户端 configurable.tenant 被忽略
+    assert scope(user_cls(identity="real", tenant="realt"), tenant="y")[0] == "realt"
 
 
 # ————————————————————————— auth(内网,无 ServiceKey) —————————————————————————
@@ -415,42 +417,51 @@ def test_auth_resolve_identity() -> None:
 
 
 def test_skill_sources(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    """返回 [<tenant>/<agent>](每个 agent 独立);目录自动创建,无全局公有。"""
-    from pathlib import Path
-
+    """agent root 下有 skill 时返回 ``["/skills"]``,否则 ``[]``。"""
+    from omniagent import save_skill
     from omniagent.workspace import skill_sources
 
-    (agent_dir,) = skill_sources(tmp_path / "skl", "t1", "a1")
-    assert Path(agent_dir).is_dir() and agent_dir.endswith("/t1/a1")
+    root = tmp_path / "agent"
+    assert skill_sources(root) == []  # 无 skill
+    save_skill(root, "demo", {"SKILL.md": "---\nname: demo\ndescription: d\n---\n"})
+    assert skill_sources(root) == ["/skills"]
+    assert (root / "skills" / "demo" / "SKILL.md").is_file()
+
+
+def test_agent_root(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """backend root = <base>/tenant-<id>/assistant-<id>(前缀自描述)。"""
+    from omniagent.workspace import agent_root
+
+    root = agent_root(tmp_path, "acme", "acme-chat")
+    assert root.name == "assistant-acme-chat"
+    assert root.parent.name == "tenant-acme"
 
 
 def test_skill_crud(tmp_path) -> None:  # type: ignore[no-untyped-def]
     """save / list / delete per-agent skill(含多文件脚本)。"""
     from omniagent import delete_skill, list_skills, save_skill
 
-    root = tmp_path / "skl"
+    root = tmp_path / "agent"
     save_skill(
         root,
-        "t1",
-        "a1",
         "my",
         {"SKILL.md": "---\nname: my\ndescription: d\n---\n", "scripts/run.py": "x=1"},
     )
-    assert "my" in list_skills(root, "t1", "a1")
-    assert (root / "t1" / "a1" / "my" / "scripts" / "run.py").is_file()
-    assert delete_skill(root, "t1", "a1", "my") is True
-    assert "my" not in list_skills(root, "t1", "a1")
+    assert "my" in list_skills(root)
+    assert (root / "skills" / "my" / "scripts" / "run.py").is_file()
+    assert delete_skill(root, "my") is True
+    assert "my" not in list_skills(root)
 
 
 def test_skill_rejects_traversal(tmp_path) -> None:  # type: ignore[no-untyped-def]
     from omniagent import save_skill
 
     with pytest.raises(ValueError):  # noqa: PT011 - 名称穿越
-        save_skill(tmp_path, "t1", "a1", "../evil", {"SKILL.md": "x"})
+        save_skill(tmp_path, "../evil", {"SKILL.md": "x"})
     with pytest.raises(ValueError):  # noqa: PT011 - 文件路径穿越
-        save_skill(tmp_path, "t1", "a1", "ok", {"../evil.py": "x"})
+        save_skill(tmp_path, "ok", {"../evil.py": "x"})
     with pytest.raises(ValueError):  # noqa: PT011 - 缺 SKILL.md
-        save_skill(tmp_path, "t1", "a1", "ok", {"a.txt": "x"})
+        save_skill(tmp_path, "ok", {"a.txt": "x"})
 
 
 def test_safe_segment_rejects_traversal() -> None:
@@ -463,19 +474,15 @@ def test_safe_segment_rejects_traversal() -> None:
 
 
 def test_purge_agent(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    """purge 清该 agent 的 skill + 所有用户的工作目录;返回各部分是否删除。"""
+    """purge 删该 agent 的整个 backend root(skill + 运行期文件)。"""
     from omniagent import purge_agent, save_skill
 
-    skl, ws = tmp_path / "skl", tmp_path / "ws"
-    save_skill(
-        skl, "t1", "a1", "s", {"SKILL.md": "---\nname: s\ndescription: d\n---\n"}
-    )
-    (ws / "work" / "t1" / "u1" / "a1").mkdir(parents=True)
-    (ws / "work" / "t1" / "u2" / "a1").mkdir(parents=True)
-    assert purge_agent(skl, ws, "t1", "a1") == {"skills": True, "work": True}
-    assert not (skl / "t1" / "a1").exists()
-    assert not (ws / "work" / "t1" / "u1" / "a1").exists()
-    assert purge_agent(skl, ws, "t1", "a1") == {"skills": False, "work": False}
+    root = tmp_path / "agent"
+    save_skill(root, "s", {"SKILL.md": "---\nname: s\ndescription: d\n---\n"})
+    (root / "notes.txt").write_text("scratch", encoding="utf-8")
+    assert purge_agent(root) is True
+    assert not root.exists()
+    assert purge_agent(root) is False  # 已不存在
 
 
 def test_http_routes() -> None:

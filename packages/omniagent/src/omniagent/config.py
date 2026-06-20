@@ -56,8 +56,8 @@ class Settings(BaseSettings):
     temperature: float = 0.0
     fallback_model: str | None = None
 
-    workspace: str = ".agent"  # 运行时按 work/<tenant>/<user>/<agent> 隔离
-    skills_root: str = ".agent/skills"  # 按 <tenant>/<agent> 隔离
+    # 每个 assistant 的 backend root = <base>/tenant-<id>/assistant-<id>
+    workspace: str = ".agent"
 
     model_max_retries: int = 2
     tool_max_retries: int = 2

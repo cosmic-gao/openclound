@@ -131,27 +131,26 @@ Aegra 仅内网部署,网关在内网注入身份头,[auth.py](src/omniagent/aut
 |---|---|---|---|
 | **assistant**(= agent) | `user_id = tenant` | 列表 / CRUD 租户级 | **Aegra 原生** `/assistants` |
 | **会话** thread/run/历史 | `user_id = user` | **用户私有** | **Aegra 原生** `/threads` + checkpointer |
-| **skill** | `<tenant>/<agent>` | per-agent | omniagent 磁盘 |
-| **workspace** | `<tenant>/<user>/<agent>` | per-user 运行时 | omniagent 磁盘 |
+| **backend root**(skill + 运行期文件) | `tenant-<id>/assistant-<id>` | **per-assistant**(skill 在 `/skills`) | omniagent 磁盘 |
 
 > Aegra 隔离锚定 `user_id`(= 鉴权 `identity`)。**assistant 读 = `OR(identity,"system")`、run 加载 assistant 不校验 owner** —— 故 `user_id=tenant` 即得租户级列表隔离,用户仍能 run 本租户 assistant;会话则 `user_id=user` 硬私有。**跨租户 run 的拦截由网关在入口做。**
 
 ### Skill(每个 agent 独立)
 
 ```
-AGENT_SKILLS_ROOT/
-└── <tenant>/<agent>/<skill>/     # 每个 agent(assistant)一套私有;可含多文件 + 脚本
-    └── SKILL.md (+ scripts/…)
+AGENT_WORKSPACE/tenant-<id>/assistant-<id>/  # 该 assistant 的 backend root(虚拟根)
+├── skills/<skill>/SKILL.md (+ scripts/…)    # canonical skill,agent 经 /skills 读取(零复制)
+└── …                                        # 运行期文件(execute / write_file)
 ```
 
-无全局公有层。**热更新**:写 / 删磁盘 → **下个新会话** `before_agent` 自动重扫加载。两种写入:
+skill 直接落在 assistant 的 backend root 下,agent 经虚拟路径 `/skills` 读取(无复制)。**热更新**:写 / 删磁盘 → **下个新会话** `before_agent` 自动重扫。两种写入:
 
 1. 代码:`from omniagent import save_skill, list_skills, delete_skill`(见 [skills.py](src/omniagent/skills.py));
 2. HTTP(管理身份,见 [http.py](src/omniagent/http.py)):`GET/PUT/DELETE /skills?agent=<id>`(PUT body `{"files": {...}}`)。
 
-**删除 agent**:Aegra `DELETE /assistants/{id}` 只删记录、**无生命周期钩子**,故网关删除成功后应调 `DELETE /agents/{id}`(omniagent),清该 agent 的全部 skill 与各用户工作目录(`purge_agent`,返回 `{"skills": …, "work": …}`)。
+**删除 agent**:Aegra `DELETE /assistants/{id}` 只删记录、**无生命周期钩子**,故网关删除成功后应调 `DELETE /agents/{id}`(omniagent),删该 agent 的整个 backend root(`purge_agent`,返回 `{"purged": true}`)。
 
-> 脚本类 skill **必须落盘**才能被 `execute` 执行;多副本需共享 / 同步该 skill 目录。
+> 脚本类 skill **必须落盘**才能被 `execute` 执行。同一 assistant 的用户共享该 root 文件区,会话历史仍由 Aegra 按用户私有。
 
 ### 本地验证(curl,无 ServiceKey)
 
@@ -200,8 +199,7 @@ curl -N -X POST http://127.0.0.1:2026/threads/alice-1/runs/stream -H "X-User-Id:
 | `AGENT_MODEL` | `claude-sonnet-4-6` | 默认模型(可被 `config.model` 覆盖) |
 | `AGENT_TEMPERATURE` | `0.0` | 默认温度(可被 `config.temperature` 覆盖) |
 | `AGENT_FALLBACK_MODEL` | 空 | 主模型失败时的备用模型 |
-| `AGENT_WORKSPACE` | `.agent` | 工作区根(运行时按 `work/<tenant>/<user>/<agent>`) |
-| `AGENT_SKILLS_ROOT` | `.agent/skills` | skill 根:`<tenant>/<agent>/`(每 agent 一套) |
+| `AGENT_WORKSPACE` | `.agent` | backend 根;每个 assistant root=`tenant-<id>/assistant-<id>` |
 | `AGENT_ENABLE_FILE_SEARCH` | `0` | ripgrep 文件搜索(deepagents 已有 glob/grep) |
 | `AGENT_PII_STRATEGY` | `off` | PII 脱敏:`off`/`block`/`redact`/`mask`/`hash` |
 | `AGENT_TOOL_CALL_LIMIT` | 空 | 单次运行工具调用上限(模型迭代上限是 per-agent `steps`) |

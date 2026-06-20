@@ -23,7 +23,7 @@ from omniagent.model import build_model
 from omniagent.modes import ResolvedConfig, fingerprint, resolve
 from omniagent.review import build_review_middleware
 from omniagent.skills import delete_skill, list_skills, save_skill
-from omniagent.workspace import init_workspace, purge_agent, skill_sources
+from omniagent.workspace import agent_root, init_workspace, purge_agent, skill_sources
 
 __all__ = [
     "AGENT_NAME",
@@ -34,6 +34,7 @@ __all__ = [
     "ResolvedConfig",
     "ReviewConfig",
     "Settings",
+    "agent_root",
     "build_agent",
     "build_middleware",
     "build_model",
