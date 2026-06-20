@@ -1,171 +1,126 @@
-"""深度智能体构建入口:组装 model / tools / skills / memory / middleware / subagents。
+"""按 :class:`~omniagent.modes.ResolvedConfig` 组装 deep agent。
 
-- **模型**:经 OpenAI 兼容端点接入(见 :mod:`omniagent.model`)。
-- **工具**:deepagents 内置工具(规划 / 文件系统 / 子代理 / shell) + 调用方工具
-  + (异步入口下)MCP 工具。
-- **能力 / 安全**:shell、文件搜索、重试、调用上限、上下文管理、PII、HITL
-  (见 :mod:`omniagent.middleware`)。
-- **skills**:工作区 ``skills/`` 下每个含 ``SKILL.md`` 的目录(声明式按需加载)。
-- **memory**:工作区 ``memories/AGENTS.md`` 注入系统提示 + 可选短期 / 长期记忆。
+纯 Aegra 形态:持久层由平台注入(无 checkpointer / store)。模型、工具裁剪、HITL、审核、
+skill、工作区由 per-agent 配置驱动;MCP 工具在 graph 内联加载后传入。
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend, LocalShellBackend
-from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.store.memory import InMemoryStore
+from langchain.agents.middleware import AgentMiddleware
 
 from omniagent.config import Settings, get_settings
-from omniagent.mcp import load_mcp_tools
-from omniagent.middleware import build_middleware, interrupts
+from omniagent.middleware import build_middleware
 from omniagent.model import build_model
-from omniagent.workspace import has_skills, init_workspace, memory_files
+from omniagent.review import build_review_middleware
+from omniagent.workspace import init_workspace
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Awaitable, Callable
     from pathlib import Path
 
-    from deepagents import SubAgent
-    from langchain.agents.middleware import AgentMiddleware
-    from langchain_core.language_models import BaseChatModel
+    from langchain.agents.middleware import (
+        InterruptOnConfig,
+        ModelRequest,
+        ModelResponse,
+    )
     from langchain_core.tools import BaseTool
-    from langgraph.checkpoint.base import BaseCheckpointSaver
-    from langgraph.store.base import BaseStore
 
-#: 追加到 deepagents 内置系统提示之前的默认指令(``create_deep_agent`` 会把
-#: 调用方 ``system_prompt`` 放在其内置 BASE 提示之前)。
-DEFAULT_SYSTEM_PROMPT = (
-    "You are openclound's deep agent. Plan with the todo tool, keep working notes "
-    "in the file system, consult your skills for domain workflows, and delegate "
-    "isolated subtasks to subagents. Be thorough and verify before finishing."
-)
+    from omniagent.modes import ResolvedConfig
 
-#: agent 名称(出现在 LangGraph 元数据 / 追踪中)。
-DEFAULT_AGENT_NAME = "openclound-omniagent"
+AGENT_NAME = "openclound-omniagent"
 
 
-def _build_backend(settings: Settings, root: Path) -> FilesystemBackend:
-    """按是否启用 shell 选择 backend(均为真实本地文件系统,``virtual_mode=False``)。
+def _tool_name(tool: BaseTool | dict[str, Any]) -> str | None:
+    return tool.get("name") if isinstance(tool, dict) else getattr(tool, "name", None)
 
-    - 启用 shell:``LocalShellBackend`` —— 用 ``subprocess(shell=True)`` 跨平台执行,
-      Windows 走 ``cmd``、POSIX 走 ``/bin/sh``,并暴露内置 ``execute`` 工具;
-      ``inherit_env=True`` 让子进程继承 PATH 等环境(``python`` / ``git`` 可用)。
-    - 关闭 shell:``FilesystemBackend`` —— 仅文件工具,``execute`` 会被自动过滤。
+
+class ToolFilter(AgentMiddleware[Any, Any, Any]):
+    """从模型请求移除被裁剪的工具(``permission=deny`` / ``tools=false``)。
+
+    deepagents 无 per-agent 工具裁剪的公开参数(仅 HarnessProfile 级),故在请求层过滤;
+    须排在注入工具的中间件之后(builder 末尾追加)。
     """
-    if settings.enable_shell:
-        return LocalShellBackend(root_dir=root, virtual_mode=False, inherit_env=True)
-    return FilesystemBackend(root_dir=root, virtual_mode=False)
+
+    def __init__(self, excluded: set[str]) -> None:
+        super().__init__()
+        self._excluded = excluded
+
+    def _filter(self, request: ModelRequest[Any]) -> ModelRequest[Any]:
+        kept = [t for t in request.tools if _tool_name(t) not in self._excluded]
+        return request.override(tools=kept)
+
+    def wrap_model_call(
+        self,
+        request: ModelRequest[Any],
+        handler: Callable[[ModelRequest[Any]], ModelResponse[Any]],
+    ) -> ModelResponse[Any]:
+        return handler(self._filter(request))
+
+    async def awrap_model_call(
+        self,
+        request: ModelRequest[Any],
+        handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
+    ) -> ModelResponse[Any]:
+        return await handler(self._filter(request))
+
+
+def _backend(
+    resolved: ResolvedConfig, root: Path
+) -> FilesystemBackend | LocalShellBackend:
+    """``execute`` 未裁剪用跨平台 shell backend,否则纯文件 backend。"""
+    if "execute" in resolved.excluded_tools:
+        return FilesystemBackend(root_dir=root, virtual_mode=False)
+    return LocalShellBackend(root_dir=root, virtual_mode=False, inherit_env=True)
 
 
 def build_agent(
     *,
-    tools: list[BaseTool] | None = None,
-    subagents: Sequence[SubAgent] | None = None,
-    system_prompt: str = DEFAULT_SYSTEM_PROMPT,
+    resolved: ResolvedConfig,
+    skill_sources: list[str],
+    workspace: str | Path,
     settings: Settings | None = None,
-    model: BaseChatModel | None = None,
-    skill_sources: list[str] | None = None,
-    managed_checkpointer: bool = False,
-    checkpointer: BaseCheckpointSaver[Any] | None = None,
-    store: BaseStore | None = None,
-    platform_managed: bool = False,
-    extra_middleware: Sequence[AgentMiddleware] | None = None,
-    name: str = DEFAULT_AGENT_NAME,
+    tools: list[BaseTool] | None = None,
+    name: str = AGENT_NAME,
 ) -> Any:
-    """构建一个集成全部能力的 deep agent(同步)。
-
-    使用 OpenAI 兼容端点模型、deepagents 内置工具 + 调用方工具、skills 与记忆。
-    需要 MCP 工具时请改用 :func:`build_async_agent`。
+    """按 :class:`ResolvedConfig` 构建 deep agent(平台托管:无 checkpointer / store)。
 
     Args:
-        tools: 额外的自定义工具(与 deepagents 内置工具合并)。
-        subagents: 子代理配置列表(经 ``task`` 工具调用)。
-        system_prompt: 追加到 deepagents 内置系统提示之前的指令。
-        settings: 运行配置;为空则调用 :func:`~omniagent.config.get_settings`。
-        model: 直接指定模型实例,覆盖 ``settings`` 中的网关模型。
-        skill_sources: 显式 skill 源路径列表(多租户用,如公有 + 租户目录的绝对路径)。
-            提供时直接采用、不再 seed 工作区模板;为空则回退到工作区 ``skills/``(有
-            ``SKILL.md`` 才加载),并注入 ``memories/AGENTS.md``(存在时)。
-        managed_checkpointer: ``True`` 时自动附带进程内 checkpointer / store。
-        checkpointer: 显式短期记忆;优先于 ``managed_checkpointer`` 自动创建的实例。
-        store: 显式长期记忆。
-        platform_managed: ``True`` 时持久层由部署平台(如 Aegra)在运行时注入,故**不**
-            附带 checkpointer / store,也不为 HITL 自动补(用于 :mod:`omniagent.graph`)。
-        extra_middleware: 追加到能力 / 安全中间件之后的自定义中间件。
+        resolved: 合并后的开关(模型 / 提示 / 工具裁剪 / HITL / 审核)。
+        skill_sources: skill 源路径(``<tenant>/<agent>`` 绝对 POSIX)。
+        workspace: 该 (租户, 用户, agent) 的工作目录。
+        settings: 进程级配置;为空则取默认。
+        tools: 额外工具(如 :mod:`omniagent.graph` 加载的 MCP 工具)。
         name: agent 名称。
-
-    Returns:
-        已编译的 LangGraph 图,支持 ``invoke`` / ``ainvoke`` / ``stream`` 等接口。
     """
     settings = settings or get_settings()
-    standalone = skill_sources is None
-    # 多租户(显式 skill_sources)下不 seed 模板,工作目录仅 mkdir。
-    root = init_workspace(settings.workspace, seed=standalone)
-
-    llm = model if model is not None else build_model(settings)
-    backend = _build_backend(settings, root)
-
-    if standalone:
-        skills = ["skills"] if has_skills(root) else None
-        memory = memory_files(root) or None
-    else:
-        skills = skill_sources or None
-        memory = None  # 多租户:场景由 assistant 的 system_prompt 提供
-
-    middleware = list(build_middleware(settings, workspace_root=root))
-    if extra_middleware:
-        middleware.extend(extra_middleware)
-
-    interrupt_on = interrupts(settings)
-
-    if platform_managed:
-        # 部署平台(Aegra 等)负责持久化:此处不附带 checkpointer / store。
-        checkpointer = None
-        store = None
-    else:
-        if managed_checkpointer:
-            checkpointer = checkpointer or InMemorySaver()
-            store = store or InMemoryStore()
-        # HITL 没有 checkpointer 无法中断 / 恢复 —— 自动补一个进程内 checkpointer。
-        if interrupt_on and checkpointer is None:
-            checkpointer = InMemorySaver()
-
-    return create_deep_agent(
-        model=llm,
-        tools=list(tools or []),
-        system_prompt=system_prompt,
-        middleware=middleware,
-        subagents=list(subagents) if subagents else [],
-        skills=skills,
-        memory=memory,
-        backend=backend,
-        interrupt_on=interrupt_on or None,
-        checkpointer=checkpointer,
-        store=store,
-        name=name,
+    root = init_workspace(workspace)
+    model = build_model(
+        settings, model=resolved.model, temperature=resolved.temperature
     )
 
+    middleware: list[AgentMiddleware[Any, Any, Any]] = [
+        *build_middleware(resolved, settings, workspace_root=root),
+        *build_review_middleware(resolved, model),
+    ]
+    if resolved.excluded_tools:
+        middleware.append(ToolFilter(set(resolved.excluded_tools)))
 
-async def build_async_agent(
-    *,
-    mcp_servers: dict[str, dict[str, Any]] | None = None,
-    tools: list[BaseTool] | None = None,
-    **kwargs: Any,
-) -> Any:
-    """构建一个挂载 MCP 工具的 deep agent(异步)。
-
-    Args:
-        mcp_servers: MCP server 连接配置(见 :func:`omniagent.mcp.load_mcp_tools`);
-            为空时等价于 :func:`build_agent`。
-        tools: 额外的自定义工具(与 MCP 工具、内置工具合并)。
-        **kwargs: 透传给 :func:`build_agent`(如 ``subagents`` / ``settings`` 等)。
-
-    Returns:
-        已编译的 LangGraph 图。
-    """
-    mcp_tools = await load_mcp_tools(mcp_servers or {})
-    merged: list[BaseTool] = [*(tools or []), *mcp_tools]
-    return build_agent(tools=merged, **kwargs)
+    return create_deep_agent(
+        model=model,
+        tools=list(tools or []),
+        system_prompt=resolved.prompt,
+        middleware=middleware,
+        skills=skill_sources or None,
+        backend=_backend(resolved, root),
+        interrupt_on=cast(
+            "dict[str, bool | InterruptOnConfig] | None",
+            resolved.interrupt_on or None,
+        ),
+        checkpointer=None,  # 持久层由 Aegra 注入
+        store=None,
+        name=name,
+    )

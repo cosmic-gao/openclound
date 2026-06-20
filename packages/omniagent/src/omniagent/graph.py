@@ -1,87 +1,75 @@
-"""Aegra 部署入口:把 agent 暴露为 Aegra 可加载的「图」(多用户 / 多 agent / 多租户)。
+"""Aegra 部署入口:async 工厂图,按 ``(scope, 配置)`` 装配并缓存编译图。
 
-`Aegra <https://docs.aegra.dev>`_(自托管 LangGraph Platform 替代,FastAPI + Postgres)
-通过 ``aegra.json`` 的 ``graphs`` 注册图,值形如 ``"./src/omniagent/graph.py:graph"``。
+Aegra 通过 ``aegra.json`` 的 ``graphs`` 注册本模块的 :func:`graph`,识别为 config 工厂、
+每请求 ``await`` 调用。每次 run 从 ``config`` 解析 scope(user/tenant/agent)与
+``AgentConfig``,合并出开关,装配 skill / 工作区 / 模型 / 工具 / 审核。
 
-本模块导出一个 **按请求构建的工厂** :func:`graph`。每次 run 从 ``config`` 解析出三个
-维度,对应两套正交的隔离:
-
-- **user**:取自鉴权身份 ``langgraph_auth_user.identity``。Aegra 把 assistant /
-  thread / run / cron 按 ``user_id == identity`` 强隔离,即每个用户私有自己的 agent
-  与会话;omniagent 据此把工作区也按用户私有。
-- **tenant**:取自鉴权身份的自定义字段 ``tenant_id``(见 :mod:`omniagent.auth`)。Aegra
-  不认它;omniagent 用它定位 **租户共享的 skill**(同租户所有用户 / agent 共享)。
-- **agent**:取自 assistant 配置 ``configurable.agent_id``,其 ``system_prompt`` 即该
-  agent 的场景指令。
-
-据此:skill 源 = ``[公有, 该租户]``(租户共享 + 全局 public);工作区 =
-``work/<tenant>/<user>/<agent>``(用户私有)。持久化由 Aegra 注入(Postgres),故
-``platform_managed=True``、不带 checkpointer / store;skill 改动下个新会话生效。
-
-安全:有鉴权身份时 user / tenant 只取自 ``langgraph_auth_user``,
-不信客户端 ``configurable``(防伪造);无鉴权(本地直调)才回退 config。
+scope 中 user / tenant **只取自** ``langgraph_auth_user``(防伪造);无鉴权才回退
+``configurable``。图按 ``(scope, 配置指纹)`` 缓存;持久化由 Aegra 注入,故不带
+checkpointer / store。
 """
 
 from __future__ import annotations
 
-from functools import lru_cache
+import asyncio
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
-from omniagent.builder import DEFAULT_SYSTEM_PROMPT, build_agent
-from omniagent.config import get_settings, safe_segment
+from omniagent.builder import build_agent
+from omniagent.config import AgentConfig, get_settings, safe_segment
+from omniagent.mcp import load_mcp_tools
+from omniagent.modes import fingerprint, resolve
 from omniagent.workspace import skill_sources
 
+#: 编译图缓存(键 = ``(user, tenant, agent, 配置指纹)``);async 构建含 ``await``,故手写
+#: ``OrderedDict`` + 锁(FIFO 淘汰),替代不支持协程的 ``lru_cache``。
+_CACHE: OrderedDict[tuple[str, str, str, str], Any] = OrderedDict()
+_CACHE_MAX = 256
+_LOCK = asyncio.Lock()
 
-def _resolve_scope(config: dict[str, Any] | None) -> tuple[str, str, str, str]:
-    """从 run config 解析 ``(user, tenant, agent, system_prompt)``,并校验路径段。"""
+
+def _resolve_scope(config: dict[str, Any] | None) -> tuple[str, str, str]:
+    """解析 ``(user, tenant, agent)`` 并校验路径段。"""
     cfg = (config or {}).get("configurable") or {}
     auth_user = cfg.get("langgraph_auth_user")
     if auth_user is not None:
-        # 鉴权身份(Aegra ``User`` 对象):identity=用户(Aegra 隔离锚),tenant_id=租户。
-        # ``User.__getattr__`` 对缺失字段抛 AttributeError,故用带默认值的 getattr。
         user = getattr(auth_user, "identity", None) or "anonymous"
-        tenant = getattr(auth_user, "tenant_id", None) or "public"
+        tenant = getattr(auth_user, "tenant", None) or "public"
     else:
-        # 本地直调(无鉴权):从 configurable 回退。
         user = cfg.get("user_id") or "anonymous"
-        tenant = cfg.get("tenant_id") or "public"
-    agent = cfg.get("agent_id") or "default"
-    system_prompt = cfg.get("system_prompt") or DEFAULT_SYSTEM_PROMPT
-    return (
-        safe_segment(str(user)),
-        safe_segment(str(tenant)),
-        safe_segment(str(agent)),
-        system_prompt,
-    )
+        tenant = cfg.get("tenant") or "public"
+    agent = cfg.get("agent") or "default"
+    return safe_segment(str(user)), safe_segment(str(tenant)), safe_segment(str(agent))
 
 
-@lru_cache(maxsize=256)
-def _build_agent(user: str, tenant: str, agent: str, system_prompt: str) -> Any:
-    """按 ``(user, tenant, agent, system_prompt)`` 构建并缓存编译图。
-
-    缓存的是**编译图**(避免每条消息重编译);skill 仍在 ``before_agent`` 运行时按会话
-    重扫,故热更新不受缓存影响。模型 / skills_root 等来自环境(进程内固定),变更后需
-    重启或 ``_build_agent.cache_clear()``。
-    """
-    settings = get_settings()
-    # skill:公有 + 租户共享(同租户所有用户 / agent 共享)。
-    sources = skill_sources(settings.skills_root, tenant)
-    # 工作区:按 (租户, 用户, agent) 私有(execute cwd + 会话文件,用户间不串)。
-    settings.workspace = str(Path(settings.workspace) / "work" / tenant / user / agent)
-    return build_agent(
-        settings=settings,
-        skill_sources=sources,
-        system_prompt=system_prompt,
-        platform_managed=True,
-    )
-
-
-def graph(config: dict[str, Any] | None = None) -> Any:
-    """Aegra 按请求图工厂:按 ``(user, tenant, agent)`` 装配 skill 与场景(图带缓存)。
+async def graph(config: dict[str, Any] | None = None) -> Any:
+    """Aegra 按请求 async 图工厂。
 
     Args:
-        config: Aegra/LangGraph 传入的 run 配置;``configurable`` 里带鉴权用户与
-            assistant 配置。本地直接调用时可省略(回退 ``anonymous/public/default``)。
+        config: run 配置;``configurable`` 带鉴权用户与开关。本地直调可省略
+            (回退 ``anonymous/public/default`` + react)。
     """
-    return _build_agent(*_resolve_scope(config))
+    user, tenant, agent = _resolve_scope(config)
+    settings = get_settings()
+    resolved = resolve(AgentConfig.parse((config or {}).get("configurable")), settings)
+    key = (user, tenant, agent, fingerprint(resolved))
+
+    if (cached := _CACHE.get(key)) is not None:
+        return cached
+
+    async with _LOCK:
+        if (cached := _CACHE.get(key)) is not None:  # 双重检查:等锁期间或已建好
+            return cached
+        tools = await load_mcp_tools(resolved.mcp_servers)
+        built = build_agent(
+            resolved=resolved,
+            skill_sources=skill_sources(settings.skills_root, tenant, agent),
+            workspace=str(Path(settings.workspace) / "work" / tenant / user / agent),
+            settings=settings,
+            tools=tools,
+        )
+        _CACHE[key] = built
+        if len(_CACHE) > _CACHE_MAX:
+            _CACHE.popitem(last=False)  # FIFO 淘汰最旧
+        return built
