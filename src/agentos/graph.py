@@ -12,11 +12,11 @@ from weakref import WeakValueDictionary
 
 from cachetools import TTLCache
 
-from omniagent.builder import build_agent
-from omniagent.config import AgentConfig, get_settings, safe_segment
-from omniagent.mcp import load_mcp_tools
-from omniagent.spec import fingerprint, resolve
-from omniagent.storage import agent_root, skill_signature, skill_sources
+from agentos.builder import build_agent
+from agentos.config import AgentConfig, get_settings, safe_segment
+from agentos.mcp import load_mcp_tools
+from agentos.spec import fingerprint, resolve
+from agentos.storage import agent_root, skill_signature, skill_sources
 
 #: 编译图缓存(键 = (agent, 指纹);LRU + TTL)。指纹含 skill 签名,故 skill 增删触发重建。
 _CACHE: TTLCache[tuple[str, str], Any] = TTLCache(maxsize=256, ttl=3600)

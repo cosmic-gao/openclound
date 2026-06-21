@@ -1,4 +1,4 @@
-"""openclound ``omniagent``:config 驱动、双形态、跨会话记忆的生产级 agent 基础包。
+"""openclound ``agentos``:config 驱动、双形态、跨会话记忆的生产级 agent 基础包。
 
 封装 LangChain ``deepagents``,作为 **Aegra 项目**部署(图入口见 ``graph.py``)。
 形态与开关由每个 assistant 的 ``config.configurable`` 决定(见 :class:`AgentConfig`)。
@@ -6,8 +6,8 @@
 连接 per-assistant 必填,缺失回退 env。
 """
 
-from omniagent.builder import AGENT_NAME, build_agent
-from omniagent.config import (
+from agentos.builder import AGENT_NAME, build_agent
+from agentos.config import (
     AgentConfig,
     Permission,
     PIIStrategy,
@@ -17,18 +17,18 @@ from omniagent.config import (
     resolve_path,
     safe_segment,
 )
-from omniagent.mcp import load_mcp_tools
-from omniagent.memory import MEMORY_FILE, build_backend, memory_sources
-from omniagent.middleware import ToolFilter, build_middleware, build_review_middleware
-from omniagent.model import build_model
-from omniagent.spec import (
+from agentos.mcp import load_mcp_tools
+from agentos.memory import MEMORY_FILE, build_backend, memory_sources
+from agentos.middleware import ToolFilter, build_middleware, build_review_middleware
+from agentos.model import build_model
+from agentos.spec import (
     DEFAULT_PROMPT,
     PIPELINE_PROMPT,
     ResolvedConfig,
     fingerprint,
     resolve,
 )
-from omniagent.storage import (
+from agentos.storage import (
     agent_root,
     delete_skill,
     delete_skill_file,

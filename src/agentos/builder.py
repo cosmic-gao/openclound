@@ -6,11 +6,11 @@ from typing import TYPE_CHECKING, Any, cast
 
 from deepagents import create_deep_agent
 
-from omniagent.config import Settings, get_settings
-from omniagent.memory import build_backend, memory_sources
-from omniagent.middleware import ToolFilter, build_middleware, build_review_middleware
-from omniagent.model import build_model
-from omniagent.storage import init_workspace
+from agentos.config import Settings, get_settings
+from agentos.memory import build_backend, memory_sources
+from agentos.middleware import ToolFilter, build_middleware, build_review_middleware
+from agentos.model import build_model
+from agentos.storage import init_workspace
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -18,9 +18,9 @@ if TYPE_CHECKING:
     from langchain.agents.middleware import AgentMiddleware, InterruptOnConfig
     from langchain_core.tools import BaseTool
 
-    from omniagent.spec import ResolvedConfig
+    from agentos.spec import ResolvedConfig
 
-AGENT_NAME = "openclound-omniagent"
+AGENT_NAME = "openclound-agentos"
 
 
 def build_agent(

@@ -10,7 +10,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from omniagent.config import TOOL_ALIASES, AgentConfig, PIIStrategy, Settings
+from agentos.config import TOOL_ALIASES, AgentConfig, PIIStrategy, Settings
 
 #: 基础系统指令(自由 ReAct;叠加在 config.prompt 之前)。
 DEFAULT_PROMPT = (
@@ -36,7 +36,7 @@ PIPELINE_PROMPT = (
 
 @dataclass(frozen=True)
 class ResolvedConfig:
-    """合并后的最终开关(只读),供 :func:`omniagent.builder.build_agent` 消费。"""
+    """合并后的最终开关(只读),供 :func:`agentos.builder.build_agent` 消费。"""
 
     model: str | None
     base_url: str | None

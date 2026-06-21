@@ -22,7 +22,7 @@ from langchain.agents.middleware import (
 )
 from langchain.agents.middleware.types import AgentState
 
-from omniagent.model import build_model
+from agentos.model import build_model
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -33,8 +33,8 @@ if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
     from langgraph.runtime import Runtime
 
-    from omniagent.config import Settings
-    from omniagent.spec import ResolvedConfig
+    from agentos.config import Settings
+    from agentos.spec import ResolvedConfig
 
 _PII_TYPES = ("email", "credit_card", "ip", "mac_address")  # url 误伤率高,不纳入
 

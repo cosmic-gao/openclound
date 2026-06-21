@@ -1,7 +1,7 @@
 """配置:进程级 ``Settings``(运行参数,无连接)+ 请求级 ``AgentConfig``(per-assistant)。
 
 连接(model/base_url/api_key)必须 per-assistant 显式分配,无默认;由
-:func:`omniagent.spec.resolve` 合并为最终开关。
+:func:`agentos.spec.resolve` 合并为最终开关。
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ class Settings(BaseSettings):
 
 
 class ReviewConfig(BaseModel):
-    """审核开关(见 :mod:`omniagent.review`)。"""
+    """审核开关(装配见 :func:`agentos.middleware.build_review_middleware`)。"""
 
     model_config = ConfigDict(extra="ignore")
 

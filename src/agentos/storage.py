@@ -9,7 +9,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from omniagent.config import resolve_path, safe_segment
+from agentos.config import resolve_path, safe_segment
 
 
 def agent_root(base: str | Path, agent: str) -> Path:

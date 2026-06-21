@@ -18,7 +18,7 @@ __pycache__/
 .cache/
 coverage/
 
-# omniagent 运行时工作区(backend root,不入库)
+# agentos 运行时工作区(backend root,不入库)
 .agent/
 
 # 编辑器 / 操作系统

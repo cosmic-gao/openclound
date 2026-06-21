@@ -11,10 +11,10 @@ from pathlib import Path
 from aegra_api.core.auth_deps import AuthenticatedUser
 from fastapi import FastAPI, HTTPException, Request
 
-from omniagent import storage
-from omniagent.config import get_settings
+from agentos import storage
+from agentos.config import get_settings
 
-app = FastAPI(title="omniagent admin")
+app = FastAPI(title="agentos admin")
 
 
 def _root(agent: str) -> Path:
