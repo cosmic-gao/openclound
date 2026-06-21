@@ -1,5 +1,0 @@
-{
-  "extends": "@openclound/tsconfig/monorepo",
-  "files": [],
-  "references": []
-}

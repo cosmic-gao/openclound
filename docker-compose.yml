@@ -1,0 +1,30 @@
+# omniagent 单服务,连接外部托管 Postgres + Redis(地址在 .env)。
+# cp .env.example .env && 填外部连接 && docker compose up -d --build
+
+services:
+  omniagent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: omniagent:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "2026:2026"
+    volumes:
+      - agent_workspace:/app/.agent
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:2026/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 3g
+
+volumes:
+  agent_workspace:

@@ -1,26 +1,7 @@
-# 依赖
-node_modules/
-
-# 构建产物
-dist/
-build/
-*.tsbuildinfo
-
-# 日志
-*.log
-npm-debug.log*
-pnpm-debug.log*
-
 # 环境变量
 .env
 .env.*
 !.env.example
-
-# 测试 / 覆盖率
-coverage/
-
-# 缓存
-.cache/
 
 # Python
 __pycache__/
@@ -32,7 +13,12 @@ __pycache__/
 *.egg-info/
 .python-version
 
-# deepagent 运行时工作区(由 _data 模板生成,不入库)
+# 日志 / 缓存 / 覆盖率
+*.log
+.cache/
+coverage/
+
+# omniagent 运行时工作区(backend root,不入库)
 .agent/
 
 # 编辑器 / 操作系统

@@ -1,8 +1,0 @@
-{
-  "extends": "./vite.json",
-  "display": "@openclound/tsconfig — react(React + Vite)",
-  "compilerOptions": {
-    "jsx": "react-jsx",
-    "types": ["vite/client", "react", "react-dom"]
-  }
-}

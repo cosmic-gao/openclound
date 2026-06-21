@@ -1,9 +1,0 @@
-{
-  "extends": "./vite.json",
-  "display": "@openclound/tsconfig — vue(Vue 3 + Vite)",
-  "compilerOptions": {
-    "jsx": "preserve",
-    "jsxImportSource": "vue",
-    "types": ["vite/client"]
-  }
-}

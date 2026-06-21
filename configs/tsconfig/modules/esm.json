@@ -1,8 +1,0 @@
-{
-  "display": "@openclound/tsconfig — esm(模块输出片段)",
-  "compilerOptions": {
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "verbatimModuleSyntax": true
-  }
-}
