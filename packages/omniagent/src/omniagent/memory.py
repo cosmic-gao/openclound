@@ -20,7 +20,7 @@ from deepagents.backends import (
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from omniagent.resolve import ResolvedConfig
+    from omniagent.spec import ResolvedConfig
 
 MEMORY_ROUTE = "/memories/"
 MEMORY_FILE = "/memories/AGENTS.md"

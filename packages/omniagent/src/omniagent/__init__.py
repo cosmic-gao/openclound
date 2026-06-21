@@ -2,11 +2,11 @@
 
 封装 LangChain ``deepagents``,作为 **Aegra 项目**部署(图入口见 ``graph.py``)。
 形态与开关由每个 assistant 的 ``config.configurable`` 决定(见 :class:`AgentConfig`)。
-模型统一经 ``langchain_openai`` 接入任意 OpenAI 兼容端点 / 第三方网关,
-连接 per-assistant 必填、无默认。
+模型统一经 ``langchain_openai`` 接入任意兼容端点 / 网关;
+连接 per-assistant 必填,缺失回退 env。
 """
 
-from omniagent.builder import AGENT_NAME, ToolFilter, build_agent
+from omniagent.builder import AGENT_NAME, build_agent
 from omniagent.config import (
     AgentConfig,
     Permission,
@@ -19,25 +19,28 @@ from omniagent.config import (
 )
 from omniagent.mcp import load_mcp_tools
 from omniagent.memory import MEMORY_FILE, build_backend, memory_sources
-from omniagent.middleware import build_middleware
+from omniagent.middleware import ToolFilter, build_middleware, build_review_middleware
 from omniagent.model import build_model
-from omniagent.resolve import (
+from omniagent.spec import (
     DEFAULT_PROMPT,
     PIPELINE_PROMPT,
     ResolvedConfig,
     fingerprint,
     resolve,
 )
-from omniagent.review import build_review_middleware
-from omniagent.workspace import (
+from omniagent.storage import (
     agent_root,
     delete_skill,
+    delete_skill_file,
     init_workspace,
+    list_skill_files,
     list_skills,
     purge_agent,
-    save_skill,
+    read_skill_file,
+    rename_skill_file,
     skill_signature,
     skill_sources,
+    write_skill_file,
 )
 
 __all__ = [
@@ -59,18 +62,22 @@ __all__ = [
     "build_model",
     "build_review_middleware",
     "delete_skill",
+    "delete_skill_file",
     "fingerprint",
     "get_settings",
     "init_workspace",
+    "list_skill_files",
     "list_skills",
     "load_mcp_tools",
     "memory_sources",
     "purge_agent",
+    "read_skill_file",
+    "rename_skill_file",
     "resolve",
     "resolve_path",
     "safe_segment",
-    "save_skill",
     "skill_signature",
     "skill_sources",
+    "write_skill_file",
 ]
 __version__ = "0.1.0"

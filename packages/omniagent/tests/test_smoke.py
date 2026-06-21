@@ -20,6 +20,14 @@ def _env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:  # type: ignore[no-
     """每个用例独立临时工作区;重置图缓存与 per-key 锁(每用例独立 event loop)。"""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("AGENT_WORKSPACE", str(tmp_path / "ws"))
+    for var in (
+        "AGENT_MODEL",
+        "OPENAI_BASE_URL",
+        "OPENAI_API_KEY",
+        "AGENT_TEMPERATURE",
+        "AGENT_FALLBACK_MODEL",
+    ):
+        monkeypatch.delenv(var, raising=False)
     import omniagent.graph as _graph
 
     _graph._CACHE.clear()
@@ -58,15 +66,22 @@ def test_package_metadata() -> None:
 # ————————————————————————— 进程级 Settings(无连接) —————————————————————————
 
 
-def test_settings_has_no_connection() -> None:
-    """连接(model/base_url/api_key)不再在 Settings —— 全部 per-assistant。"""
+def test_settings_connection_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """连接默认在 Settings(默认 None),可由 env 覆盖(AGENT_MODEL / OPENAI_*)。"""
     from omniagent import get_settings
 
     s = get_settings()
+    assert s.model is None
+    assert s.base_url is None
+    assert s.api_key is None
     assert s.pii_strategy == "off"
-    assert s.enable_file_search is False
-    for removed in ("model", "base_url", "api_key", "temperature", "fallback_model"):
-        assert not hasattr(s, removed)
+    monkeypatch.setenv("AGENT_MODEL", "m-env")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://env.test/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
+    s2 = get_settings()
+    assert s2.model == "m-env"
+    assert s2.base_url == "https://env.test/v1"
+    assert s2.api_key == "sk-env"
 
 
 def test_settings_runtime_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -135,7 +150,7 @@ def test_parse_agent_config_ignores_scope_fields() -> None:
 
 
 def test_resolve_defaults() -> None:
-    from omniagent.resolve import DEFAULT_PROMPT
+    from omniagent.spec import DEFAULT_PROMPT
 
     r = _resolved()
     assert r.review_enabled is False
@@ -154,7 +169,7 @@ def test_review_activates_on_rubric() -> None:
 
 def test_pipeline_prompt_opt_in() -> None:
     """纪律提示按需注入 config.prompt(不再有 pipeline mode)。"""
-    from omniagent.resolve import PIPELINE_PROMPT
+    from omniagent.spec import PIPELINE_PROMPT
 
     r = _resolved(prompt=PIPELINE_PROMPT)
     assert "RETRIEVE" in r.prompt
@@ -168,7 +183,7 @@ def test_resolve_tools_permission_to_excluded_interrupt() -> None:
 
 
 def test_resolve_prompt_appends_user() -> None:
-    from omniagent.resolve import DEFAULT_PROMPT
+    from omniagent.spec import DEFAULT_PROMPT
 
     r = _resolved(prompt="SCENE")
     assert r.prompt.startswith(DEFAULT_PROMPT)
@@ -188,6 +203,23 @@ def test_resolve_passes_connection() -> None:
     assert r.api_key == "sk-y"
     assert r.temperature == pytest.approx(0.9)
     assert r.memory is True
+
+
+def test_resolve_falls_back_to_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """config 缺连接时回退 env;config 显式值优先。"""
+    from omniagent import AgentConfig, get_settings, resolve
+
+    monkeypatch.setenv("AGENT_MODEL", "m-env")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://env.test/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
+    r = resolve(AgentConfig.parse({}), get_settings())
+    assert r.model == "m-env"
+    assert r.base_url == "https://env.test/v1"
+    assert r.api_key == "sk-env"
+    # config 显式值优先;未配的项仍回退 env
+    r2 = resolve(AgentConfig.parse({"model": "m-cfg"}), get_settings())
+    assert r2.model == "m-cfg"
+    assert r2.base_url == "https://env.test/v1"
 
 
 # ————————————————————————— 模型(统一 langchain_openai,无默认) —————————————————————————
@@ -293,7 +325,7 @@ def test_build_middleware_steps_and_fallback() -> None:
 
 
 def test_rubric_seed_middleware_injects() -> None:
-    from omniagent.review import RubricSeedMiddleware
+    from omniagent.middleware import RubricSeedMiddleware
 
     mw = RubricSeedMiddleware("RUBRIC")
     assert mw.before_agent({}, None) == {"rubric": "RUBRIC"}  # type: ignore[arg-type]
@@ -304,7 +336,7 @@ def test_build_review_middleware() -> None:
     from deepagents.middleware.rubric import RubricMiddleware
 
     from omniagent import build_model
-    from omniagent.review import RubricSeedMiddleware, build_review_middleware
+    from omniagent.middleware import RubricSeedMiddleware, build_review_middleware
 
     model = build_model(model="m", base_url="https://x.test/v1", api_key="sk")
     pipe = build_review_middleware(_resolved(review={"rubric": "x"}), model)
@@ -319,25 +351,25 @@ def test_build_review_middleware() -> None:
 def test_agent_root_no_tenant(tmp_path) -> None:  # type: ignore[no-untyped-def]
     """backend root = <base>/<agent>(无 tenant 层)。"""
     from omniagent.config import resolve_path
-    from omniagent.workspace import agent_root
+    from omniagent.storage import agent_root
 
     root = agent_root(tmp_path, "a1")
     assert root == resolve_path(tmp_path) / "a1"
 
 
 def test_skill_sources_and_signature(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    from omniagent import save_skill
-    from omniagent.workspace import skill_signature, skill_sources
+    from omniagent import write_skill_file
+    from omniagent.storage import skill_signature, skill_sources
 
     root = tmp_path / "agent"
     assert skill_sources(root) == []
     assert skill_signature(root) == ""
-    save_skill(root, "demo", {"SKILL.md": "---\nname: demo\ndescription: d\n---\n"})
+    write_skill_file(root, "demo", "SKILL.md", "x")
     assert skill_sources(root) == ["/skills"]
     sig1 = skill_signature(root)
     assert "demo" in sig1
     # 增 skill → 签名变化(触发图重建)
-    save_skill(root, "more", {"SKILL.md": "---\nname: more\ndescription: d\n---\n"})
+    write_skill_file(root, "more", "SKILL.md", "x")
     assert skill_signature(root) != sig1
 
 
@@ -394,7 +426,7 @@ def test_build_agent_exposes_default_tools(tmp_path) -> None:  # type: ignore[no
 
 
 def test_tool_filter() -> None:
-    from omniagent.builder import ToolFilter, _tool_name
+    from omniagent.middleware import ToolFilter, _tool_name
 
     assert _tool_name({"name": "write_file"}) == "write_file"
 
@@ -425,15 +457,14 @@ def test_graph_factory_async() -> None:
 
 
 def test_graph_resolve_scope() -> None:
-    """工厂图 scope 仅 agent(无租户);缺省回退 default。"""
+    """scope 仅 agent(无租户),从 config.configurable 读;缺省回退 default。"""
     from omniagent.graph import _resolve_scope
 
     assert _resolve_scope({"configurable": {"agent": "a1"}}) == "a1"
     assert _resolve_scope({}) == "default"
-    assert _resolve_scope({"agent": "a2"}) == "a2"
-    # 缺 agent 回退平台 assistant_id(避免多 assistant 撞 "default");agent 优先
+    # 缺 agent 回退平台注入的 assistant_id(避免多 assistant 撞 "default");agent 优先
     assert _resolve_scope({"configurable": {"assistant_id": "asst_x"}}) == "asst_x"
-    assert _resolve_scope({"agent": "a", "assistant_id": "x"}) == "a"
+    assert _resolve_scope({"configurable": {"agent": "a", "assistant_id": "x"}}) == "a"
 
 
 def test_graph_rejects_bad_agent() -> None:
@@ -465,16 +496,16 @@ def test_graph_caches_per_scope_and_config() -> None:
 
 def test_graph_rebuilds_on_skill_change() -> None:
     """新增 skill 改变指纹 → 重建(非同一图)。"""
-    from omniagent import get_settings, save_skill
+    from omniagent import get_settings, write_skill_file
     from omniagent.graph import graph
-    from omniagent.workspace import agent_root
+    from omniagent.storage import agent_root
 
     base = {"agent": "a1", **_CONN}
 
     async def run() -> tuple[object, object]:
         g1 = await graph({"configurable": dict(base)})
         root = agent_root(get_settings().workspace, "a1")
-        save_skill(root, "s", {"SKILL.md": "---\nname: s\ndescription: d\n---\n"})
+        write_skill_file(root, "s", "SKILL.md", "x")
         g2 = await graph({"configurable": dict(base)})
         return g1, g2
 
@@ -482,15 +513,14 @@ def test_graph_rebuilds_on_skill_change() -> None:
     assert g2 is not g1
 
 
-def test_flat_config_without_configurable() -> None:
-    """扁平 config(无 configurable 包裹)等价于 config.configurable。"""
+def test_config_reads_only_configurable() -> None:
+    """统一只读 config.configurable;扁平顶层被忽略。"""
     from omniagent.graph import _configurable, _resolve_scope
 
-    assert _resolve_scope({"agent": "a1"}) == "a1"
-    assert _configurable({"model": "m"})["model"] == "m"
-    # configurable 优先(承载运行时注入)
-    merged = _configurable({"model": "a", "configurable": {"model": "b"}})
-    assert merged["model"] == "b"
+    assert _configurable({"configurable": {"model": "m"}})["model"] == "m"
+    assert _configurable({"model": "flat"}) == {}  # 顶层扁平不再读取
+    assert _resolve_scope({"configurable": {"agent": "a1"}}) == "a1"
+    assert _resolve_scope({"agent": "flat"}) == "default"  # 扁平 agent 被忽略
 
 
 # ————————————————————————— auth(内网,identity-only) —————————————————————————
@@ -508,30 +538,40 @@ def test_auth_resolve_identity() -> None:
 # ————————————————————————— skill CRUD / 安全 —————————————————————————
 
 
-def test_skill_crud(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    from omniagent import delete_skill, list_skills, save_skill
+def test_skill_file_crud(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """文件级 CRUD:写(新增=保存,任意路径)/ 列 / 读 / 改名 / 删。"""
+    from omniagent import (
+        delete_skill,
+        delete_skill_file,
+        list_skill_files,
+        list_skills,
+        read_skill_file,
+        rename_skill_file,
+        write_skill_file,
+    )
 
     root = tmp_path / "agent"
-    save_skill(
-        root,
-        "my",
-        {"SKILL.md": "---\nname: my\ndescription: d\n---\n", "scripts/run.py": "x=1"},
-    )
+    write_skill_file(root, "my", "SKILL.md", "x")  # 写 SKILL.md 即创建该 skill
+    write_skill_file(root, "my", "scripts/run.py", "x = 1\n")
     assert "my" in list_skills(root)
-    assert (root / "skills" / "my" / "scripts" / "run.py").is_file()
+    assert list_skill_files(root, "my") == ["SKILL.md", "scripts/run.py"]
+    assert read_skill_file(root, "my", "scripts/run.py") == "x = 1\n"
+    rename_skill_file(root, "my", "scripts/run.py", "scripts/main.py")
+    assert list_skill_files(root, "my") == ["SKILL.md", "scripts/main.py"]
+    assert delete_skill_file(root, "my", "scripts/main.py") is True
+    assert delete_skill_file(root, "my", "nope.txt") is False
+    assert list_skill_files(root, "my") == ["SKILL.md"]
     assert delete_skill(root, "my") is True
     assert "my" not in list_skills(root)
 
 
 def test_skill_rejects_traversal(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    from omniagent import save_skill
+    from omniagent import write_skill_file
 
-    with pytest.raises(ValueError):
-        save_skill(tmp_path, "../evil", {"SKILL.md": "x"})
-    with pytest.raises(ValueError):
-        save_skill(tmp_path, "ok", {"../evil.py": "x"})
-    with pytest.raises(ValueError):
-        save_skill(tmp_path, "ok", {"a.txt": "x"})
+    with pytest.raises(ValueError):  # 名段穿越
+        write_skill_file(tmp_path, "../evil", "SKILL.md", "x")
+    with pytest.raises(ValueError):  # 文件路径穿越
+        write_skill_file(tmp_path, "ok", "../evil.py", "x")
 
 
 def test_safe_segment_rejects_traversal() -> None:
@@ -544,10 +584,10 @@ def test_safe_segment_rejects_traversal() -> None:
 
 
 def test_purge_agent(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    from omniagent import purge_agent, save_skill
+    from omniagent import purge_agent, write_skill_file
 
     root = tmp_path / "agent"
-    save_skill(root, "s", {"SKILL.md": "---\nname: s\ndescription: d\n---\n"})
+    write_skill_file(root, "s", "SKILL.md", "x")
     (root / "notes.txt").write_text("scratch", encoding="utf-8")
     assert purge_agent(root) is True
     assert not root.exists()
@@ -555,10 +595,16 @@ def test_purge_agent(tmp_path) -> None:  # type: ignore[no-untyped-def]
 
 
 def test_http_routes() -> None:
-    """skill CRUD + agent 清理路由(按 agent 单维)。"""
+    """skill / skill 文件 / agent 清理路由(按 agent=assistant_id)。"""
     pytest.importorskip("fastapi")
     pytest.importorskip("aegra_api")
     from omniagent.http import app
 
     paths = {getattr(r, "path", None) for r in app.routes}
-    assert {"/skills", "/skills/{name}", "/agents/{agent}"} <= paths
+    assert {
+        "/skills",
+        "/skills/{name}",
+        "/skills/{name}/files",
+        "/agents/{agent}",
+    } <= paths
+    assert any(p and p.startswith("/skills/{name}/files/") for p in paths)

@@ -15,8 +15,8 @@ from cachetools import TTLCache
 from omniagent.builder import build_agent
 from omniagent.config import AgentConfig, get_settings, safe_segment
 from omniagent.mcp import load_mcp_tools
-from omniagent.resolve import fingerprint, resolve
-from omniagent.workspace import agent_root, skill_signature, skill_sources
+from omniagent.spec import fingerprint, resolve
+from omniagent.storage import agent_root, skill_signature, skill_sources
 
 #: 编译图缓存(键 = (agent, 指纹);LRU + TTL)。指纹含 skill 签名,故 skill 增删触发重建。
 _CACHE: TTLCache[tuple[str, str], Any] = TTLCache(maxsize=256, ttl=3600)
@@ -25,9 +25,8 @@ _LOCKS: WeakValueDictionary[tuple[str, str], asyncio.Lock] = WeakValueDictionary
 
 
 def _configurable(config: dict[str, Any] | None) -> dict[str, Any]:
-    """兼容标准 ``config.configurable`` 与扁平 ``config`` 顶层(后者运行时注入优先)。"""
-    config = config or {}
-    return {**config, **(config.get("configurable") or {})}
+    """取 ``config.configurable``(Agent Protocol 标准结构)。"""
+    return (config or {}).get("configurable") or {}
 
 
 def _resolve_scope(config: dict[str, Any] | None) -> str:

@@ -79,11 +79,13 @@ def resolve(cfg: AgentConfig, settings: Settings) -> ResolvedConfig:
         else bool(cfg.review.rubric)
     )
     return ResolvedConfig(
-        model=cfg.model,
-        base_url=cfg.base_url,
-        api_key=cfg.api_key,
+        model=cfg.model or settings.model,
+        base_url=cfg.base_url or settings.base_url,
+        api_key=cfg.api_key or settings.api_key,
         prompt=prompt,
-        temperature=cfg.temperature,
+        temperature=(
+            cfg.temperature if cfg.temperature is not None else settings.temperature
+        ),
         steps=cfg.steps,
         excluded_tools=excluded,
         interrupt_on=interrupt,
@@ -93,7 +95,7 @@ def resolve(cfg: AgentConfig, settings: Settings) -> ResolvedConfig:
         mcp_servers=dict(cfg.mcp),
         model_params=dict(cfg.model_params),
         memory=cfg.memory,
-        fallback_model=cfg.fallback_model,
+        fallback_model=cfg.fallback_model or settings.fallback_model,
         pii_strategy=cfg.pii_strategy or settings.pii_strategy,
         enable_file_search=(
             cfg.enable_file_search

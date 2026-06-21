@@ -1,13 +1,12 @@
-"""assistant 的磁盘工作区:backend root = ``<base>/<agent>``,skill 在其下 ``skills/``。
+"""assistant 的磁盘存储:backend root = ``<base>/<agent>``,skill 在其下 ``skills/``。
 
 路径与生命周期(agent_root / init / purge)、build 期 skill 发现(sources / signature)、
-skill 内容 CRUD(save / list / delete)。skill 按 assistant 隔离。
+skill 与其文件的 CRUD(列表 / 读 / 写 / 改名 / 删)。skill 按 assistant 隔离。
 """
 
 from __future__ import annotations
 
 import shutil
-from collections.abc import Mapping
 from pathlib import Path
 
 from omniagent.config import resolve_path, safe_segment
@@ -61,18 +60,9 @@ def _safe_relpath(path: str) -> Path:
     return p
 
 
-def save_skill(root: str | Path, name: str, files: Mapping[str, str]) -> Path:
-    """写入 / 覆盖一个 skill;``files`` 为 ``{相对路径: 文本}``,须含 ``SKILL.md``。"""
-    if "SKILL.md" not in files:
-        msg = "files must include 'SKILL.md'"
-        raise ValueError(msg)
-    target = _skill_dir(root, name)
-    target.mkdir(parents=True, exist_ok=True)
-    for rel, content in files.items():
-        dest = target / _safe_relpath(rel)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(content, encoding="utf-8")
-    return target
+def _skill_file(root: str | Path, name: str, path: str) -> Path:
+    """skill 内某文件的绝对路径(名段 + 相对路径双重校验)。"""
+    return _skill_dir(root, name) / _safe_relpath(path)
 
 
 def list_skills(root: str | Path) -> list[str]:
@@ -84,11 +74,59 @@ def list_skills(root: str | Path) -> list[str]:
 
 
 def delete_skill(root: str | Path, name: str) -> bool:
-    """删除一个 skill 目录;不存在返回 ``False``。"""
+    """删除整个 skill 目录;不存在返回 ``False``。"""
     target = _skill_dir(root, name)
     if not target.is_dir():
         return False
     shutil.rmtree(target)
+    return True
+
+
+def list_skill_files(root: str | Path, name: str) -> list[str]:
+    """列出某 skill 下全部文件的相对路径(posix,已排序);skill 不存在返回 ``[]``。"""
+    target = _skill_dir(root, name)
+    if not target.is_dir():
+        return []
+    return sorted(
+        p.relative_to(target).as_posix() for p in target.rglob("*") if p.is_file()
+    )
+
+
+def read_skill_file(root: str | Path, name: str, path: str) -> str:
+    """读取 skill 内某文件文本;不存在抛 ``FileNotFoundError``。"""
+    target = _skill_file(root, name, path)
+    if not target.is_file():
+        msg = f"skill file not found: {path!r}"
+        raise FileNotFoundError(msg)
+    return target.read_text(encoding="utf-8")
+
+
+def write_skill_file(root: str | Path, name: str, path: str, content: str) -> Path:
+    """写入/覆盖 skill 内某文件(任意相对路径,自动建父目录);兼作新增与保存。"""
+    target = _skill_file(root, name, path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    return target
+
+
+def rename_skill_file(root: str | Path, name: str, src: str, dst: str) -> Path:
+    """重命名/移动 skill 内文件;源不存在抛 ``FileNotFoundError``。"""
+    src_path = _skill_file(root, name, src)
+    dst_path = _skill_file(root, name, dst)
+    if not src_path.is_file():
+        msg = f"skill file not found: {src!r}"
+        raise FileNotFoundError(msg)
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    src_path.rename(dst_path)
+    return dst_path
+
+
+def delete_skill_file(root: str | Path, name: str, path: str) -> bool:
+    """删除 skill 内某文件;不存在返回 ``False``。"""
+    target = _skill_file(root, name, path)
+    if not target.is_file():
+        return False
+    target.unlink()
     return True
 
 

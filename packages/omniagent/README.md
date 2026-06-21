@@ -21,10 +21,10 @@ OpenAI 兼容端点 / 第三方网关(litellm 等)——**无任何默认,连接
 打回继续,直到满足 / 失败 / 触顶(默认 3 轮)。**给了 `review.rubric` 即自动开启**(显式
 `review.enabled:false` 可关)。
 
-## AgentConfig(per-assistant,放 assistant `config`)
+## AgentConfig(per-assistant,放 assistant `config.configurable`)
 
-字段命名 / 结构对齐 **opencode.json / Claude Code**。直接放 assistant `config` 顶层即可(也兼容标准
-`config.configurable` 包裹;两者并存时 `configurable` 优先)。
+字段命名 / 结构对齐 **opencode.json / Claude Code**,统一放在 assistant 的 `config.configurable`
+(Agent Protocol 标准结构;运行时注入的鉴权 / `assistant_id` 也在此层)。
 
 > ⚠️ **连接三件套 `model` / `base_url` / `api_key` 必须显式分配,无任何默认**;缺任一则该 assistant
 > 运行时报错。
@@ -52,15 +52,17 @@ OpenAI 兼容端点 / 第三方网关(litellm 等)——**无任何默认,连接
 示例(pipeline + 审核 + 编辑需确认 + 跨会话记忆 + 接检索 MCP):
 
 ```jsonc
-{
-  "model": "claude-sonnet-4-6",
-  "base_url": "https://your-gateway/v1",
-  "api_key": "sk-...",
-  "prompt": "你是严谨的研究助手,结论必须给来源。",
-  "permission": { "edit": "ask" },
-  "review": { "rubric": "每个结论都附可核验的来源链接", "max_iterations": 3 },
-  "memory": true,
-  "mcp": { "kb": { "transport": "streamable_http", "url": "http://kb:8000/mcp" } }
+"config": {
+  "configurable": {
+    "model": "claude-sonnet-4-6",
+    "base_url": "https://your-gateway/v1",
+    "api_key": "sk-...",
+    "prompt": "你是严谨的研究助手,结论必须给来源。",
+    "permission": { "edit": "ask" },
+    "review": { "rubric": "每个结论都附可核验的来源链接", "max_iterations": 3 },
+    "memory": true,
+    "mcp": { "kb": { "transport": "streamable_http", "url": "http://kb:8000/mcp" } }
+  }
 }
 ```
 
@@ -102,18 +104,17 @@ OpenAI 兼容端点 / 第三方网关(litellm 等)——**无任何默认,连接
 ```
 packages/omniagent/
 ├── aegra.json              # Aegra 部署:注册图 omniagent -> graph.py:graph(async 工厂)
-├── .env.example            # 进程级运行参数 + Aegra 部署变量(无模型连接)
+├── .env.example            # 进程级运行参数 + 模型连接默认(env)+ Aegra 部署
 ├── src/omniagent/
 │   ├── config.py           # Settings(运行参数)+ AgentConfig/ReviewConfig(per-agent,连接必填)+ parse
-│   ├── resolve.py          # resolve():合并 config 为 ResolvedConfig + fingerprint(无 mode)
+│   ├── spec.py             # resolve():合并 config 为 ResolvedConfig + fingerprint(无 mode)
 │   ├── model.py            # build_model():统一经 langchain_openai 构造 ChatOpenAI(无默认)
 │   ├── memory.py           # build_backend + memory_sources:跨会话记忆装配(CompositeBackend + StoreBackend)
 │   ├── mcp.py              # load_mcp_tools():逐 server 容错加载 MCP 工具
-│   ├── middleware.py       # build_middleware():重试 / 上限 / 回退 / 上下文 / PII / 文件搜索
-│   ├── review.py           # RubricSeedMiddleware + build_review_middleware(审核装配)
-│   ├── builder.py          # build_agent + ToolFilter:按 ResolvedConfig 组装
+│   ├── middleware.py       # 全部中间件:ToolFilter(裁剪)+ 审核装配 + 健壮性/上下文/PII
+│   ├── builder.py          # build_agent:按 ResolvedConfig 组装 deep agent
 │   ├── graph.py            # Aegra async 工厂:按 (agent, 配置+skill 指纹) 装配 + cachetools 缓存 + per-key 锁
-│   ├── workspace.py        # assistant 磁盘工作区:路径/生命周期 + skill 发现与 CRUD
+│   ├── storage.py          # assistant 磁盘存储:路径/生命周期 + skill 发现与 CRUD
 │   ├── auth.py             # 内网身份:X-User-Id -> {identity}(无租户)
 │   └── http.py             # /skills + /agents/{agent} 管理路由(挂 aegra.json http.app)
 └── tests/test_smoke.py
@@ -193,9 +194,9 @@ AGENT_WORKSPACE/<agent>/                       # 该 assistant 的 backend root(
 ```bash
 uv run aegra dev   # http://127.0.0.1:2026
 
-# 建 react agent(连接必须显式分配)
+# 建 agent(连接放 config.configurable,必须显式分配)
 curl -X POST http://127.0.0.1:2026/assistants -H "X-User-Id: acme" -H "Content-Type: application/json" \
-  -d '{"assistant_id":"a1","graph_id":"omniagent","config":{"agent":"a1","mode":"react","model":"claude-sonnet-4-6","base_url":"https://your-gateway/v1","api_key":"sk-..."}}'
+  -d '{"assistant_id":"a1","graph_id":"omniagent","config":{"configurable":{"agent":"a1","model":"claude-sonnet-4-6","base_url":"https://your-gateway/v1","api_key":"sk-..."}}}'
 
 # 用户开会话并发消息(X-User-Id=用户):会话私有
 curl -X POST http://127.0.0.1:2026/threads -H "X-User-Id: alice" -d '{"thread_id":"alice-1","if_exists":"do_nothing"}'

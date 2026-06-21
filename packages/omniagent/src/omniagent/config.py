@@ -1,7 +1,7 @@
 """配置:进程级 ``Settings``(运行参数,无连接)+ 请求级 ``AgentConfig``(per-assistant)。
 
 连接(model/base_url/api_key)必须 per-assistant 显式分配,无默认;由
-:func:`omniagent.resolve.resolve` 合并为最终开关。
+:func:`omniagent.spec.resolve` 合并为最终开关。
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ TOOL_ALIASES: dict[str, str] = {
 
 
 class Settings(BaseSettings):
-    """进程级运行参数(部署级);不含任何模型连接。"""
+    """进程级配置;含模型连接默认(env),assistant config 缺失对应项时回退到此。"""
 
     model_config = SettingsConfigDict(
         env_prefix="AGENT_",
@@ -39,6 +39,14 @@ class Settings(BaseSettings):
     )
 
     workspace: str = ".agent"
+
+    # 模型连接默认(env);assistant config 未配对应项时回退到此,无硬编码默认。
+    model: str | None = None  # AGENT_MODEL
+    base_url: str | None = Field(default=None, validation_alias="OPENAI_BASE_URL")
+    api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
+    temperature: float | None = None  # AGENT_TEMPERATURE
+    fallback_model: str | None = None  # AGENT_FALLBACK_MODEL
+
     model_max_retries: int = 2
     tool_max_retries: int = 2
     tool_call_limit: int | None = None
