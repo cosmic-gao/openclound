@@ -1,27 +1,20 @@
-# Docker Compose - PostgreSQL + Redis + API
-# aegra dev  -> docker compose up postgres -d  (database only, in-memory broker)
-# aegra up   -> docker compose up --build      (full stack, Redis broker)
+# 自带 PG(pgvector)+ Redis + omniagent。cp .env.example .env && docker compose up -d --build
 
 services:
   postgres:
     image: pgvector/pgvector:pg14
-    container_name: omniagent-postgres
     restart: unless-stopped
+    command: postgres -p 15432
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-omniagent}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-omniagent_secret}
       POSTGRES_DB: ${POSTGRES_DB:-omniagent}
+      POSTGRES_USER: ${POSTGRES_USER:-omniagent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-omniagent}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "15432:15432"
     volumes:
-      - postgres_data:/var/lib/postgresql
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      # -h 127.0.0.1 强制 TCP:首次 initdb 的 socket-only 临时实例不会误报 ready
-      test:
-        [
-          "CMD-SHELL",
-          "pg_isready -U ${POSTGRES_USER:-omniagent} -d ${POSTGRES_DB:-omniagent} -h 127.0.0.1",
-        ]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-omniagent} -d ${POSTGRES_DB:-omniagent} -h 127.0.0.1 -p 15432"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -29,51 +22,48 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: omniagent-redis
     restart: unless-stopped
+    command: redis-server --port 16379
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "16379:16379"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-p", "16379", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5
 
   omniagent:
-    build: .
-    container_name: omniagent-api
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: omniagent:latest
     restart: unless-stopped
-    ports:
-      - "${PORT:-2026}:${PORT:-2026}"
     env_file:
       - .env
-    environment:
-      - POSTGRES_USER=${POSTGRES_USER:-omniagent}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-omniagent_secret}
-      - POSTGRES_HOST=postgres
-      - POSTGRES_DB=${POSTGRES_DB:-omniagent}
-      - AEGRA_CONFIG=aegra.json
-      - AUTH_TYPE=${AUTH_TYPE:-noop}
-      - PORT=${PORT:-2026}
-      - REDIS_BROKER_ENABLED=true
-      - REDIS_URL=redis://redis:6379/0
+    ports:
+      - "2026:2026"
+    volumes:
+      - agent_workspace:/app/.agent
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:${PORT:-2026}/health || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:2026/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
-    volumes:
-      - ./src:/app/src:ro
-      - ./aegra.json:/app/aegra.json:ro
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 3g
 
 volumes:
   postgres_data:
   redis_data:
+  agent_workspace:

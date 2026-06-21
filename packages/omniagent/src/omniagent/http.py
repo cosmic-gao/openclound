@@ -21,12 +21,12 @@ def _root(agent: str) -> Path:
     return workspace.agent_root(get_settings().workspace, agent)
 
 
-@app.get("/skills")
+@app.get("/skills", tags=["Skill"])
 def list_skills(user: AuthenticatedUser, agent: str = "default") -> list[str]:
     return workspace.list_skills(_root(agent))
 
 
-@app.put("/skills/{name}")
+@app.put("/skills/{name}", tags=["Skill"])
 async def put_skill(
     name: str, request: Request, user: AuthenticatedUser, agent: str = "default"
 ) -> dict[str, Any]:
@@ -41,7 +41,7 @@ async def put_skill(
     return {"saved": name, "path": str(path)}
 
 
-@app.delete("/skills/{name}")
+@app.delete("/skills/{name}", tags=["Skill"])
 def delete_skill(
     name: str, user: AuthenticatedUser, agent: str = "default"
 ) -> dict[str, str]:
@@ -54,6 +54,6 @@ def delete_skill(
     return {"deleted": name}
 
 
-@app.delete("/agents/{agent}")
+@app.delete("/agents/{agent}", tags=["Agent"])
 def purge(agent: str, user: AuthenticatedUser) -> dict[str, bool]:
     return {"purged": workspace.purge_agent(_root(agent))}
