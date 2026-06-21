@@ -21,7 +21,7 @@ def _env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:  # type: ignore[no-
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("AGENT_WORKSPACE", str(tmp_path / "ws"))
     for var in (
-        "AGENT_MODEL",
+        "OPENAI_MODEL",
         "OPENAI_BASE_URL",
         "OPENAI_API_KEY",
         "AGENT_TEMPERATURE",
@@ -67,7 +67,7 @@ def test_package_metadata() -> None:
 
 
 def test_settings_connection_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    """连接默认在 Settings(默认 None),可由 env 覆盖(AGENT_MODEL / OPENAI_*)。"""
+    """连接默认在 Settings(默认 None),可由 env 覆盖(OPENAI_MODEL / OPENAI_*)。"""
     from agentos import get_settings
 
     s = get_settings()
@@ -75,7 +75,7 @@ def test_settings_connection_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.base_url is None
     assert s.api_key is None
     assert s.pii_strategy == "off"
-    monkeypatch.setenv("AGENT_MODEL", "m-env")
+    monkeypatch.setenv("OPENAI_MODEL", "m-env")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://env.test/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
     s2 = get_settings()
@@ -209,7 +209,7 @@ def test_resolve_falls_back_to_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """config 缺连接时回退 env;config 显式值优先。"""
     from agentos import AgentConfig, get_settings, resolve
 
-    monkeypatch.setenv("AGENT_MODEL", "m-env")
+    monkeypatch.setenv("OPENAI_MODEL", "m-env")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://env.test/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
     r = resolve(AgentConfig.parse({}), get_settings())

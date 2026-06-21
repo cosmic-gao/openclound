@@ -133,33 +133,38 @@ uv run ruff format .    # 格式化
 uv run mypy src         # 类型检查
 ```
 
-## 部署(连外部托管 Postgres + Redis)
+## 部署(Postgres / Redis 均为托管服务)
 
 Aegra 用 **Postgres 接管持久化**(checkpointer / 线程 / 运行 / store),对外暴露标准 **Agent Protocol**。
 图工厂是 **async config 工厂** `async def graph(config)`(Aegra 每请求 `await` 调用,按签名注入 `config`),
 内部按 `(agent, 配置 + skill 指纹)` 装配并缓存编译图,**不带 checkpointer / store**(平台运行时注入)。
 
-Postgres / Redis 均为**外部托管**(本地与生产一致),连接写在 `.env`:
+Postgres / Redis 连接全部经 `.env` 读取(本地与生产同一份):
 
 ```bash
-cp .env.example .env         # 填外部 Postgres(POSTGRES_*)+ Redis(REDIS_URL);模型走 assistant config
+cp .env.example .env         # 填托管 DATABASE_URL + REDIS_URL;模型连接走 assistant config
 ```
 
-**Docker(本地 / 生产,推荐)**——单 agentos 容器连外部 pg/redis:
+> 托管库一般强制 SSL,优先用 `DATABASE_URL`(Aegra 自动把 `sslmode` 翻译为 asyncpg 的 `ssl`):
+> `DATABASE_URL=postgresql://user:pwd@host:5432/db?sslmode=require`;Redis TLS 用 `rediss://`。
+> 密码含特殊字符须 URL 编码(`@`→`%40`);分离的 `POSTGRES_*` 字段不支持 `sslmode`。
+
+**本地启动(Windows,已装 uv)**——用 `serve.py`(`aegra serve` 在 Windows 走
+ProactorEventLoop,与 LangGraph 的 psycopg 不兼容;`serve.py` 改用 SelectorEventLoop):
 
 ```bash
-docker compose up -d --build     # http://localhost:2026,启动时自动迁移
+uv sync --extra aegra            # 首次:装依赖(含 aegra-cli,Python >=3.12)
+uv run python serve.py           # 读 .env 连 pg/redis;启动自动迁移;http://localhost:2026
 ```
 
-**进程直启**(本机已装 uv):
+**生产(Docker)**——同一份 `.env`,单 agentos 容器:
 
 ```bash
-uv sync --extra aegra            # 安装 aegra-cli(Python >=3.12)
-uv run aegra serve               # 连 .env 的外部 pg/redis;启动自动迁移
+docker compose up -d --build     # http://localhost:2026
 ```
 
-> 迁移在 `aegra serve` **启动时自动执行**(Alembic);Aegra CLI 无 `db` 子命令。
-> 多实例横向扩展:`REDIS_BROKER_ENABLED=true` + 共享 `REDIS_URL`(Redis 队列分发 worker)。
+> 迁移默认启动时自动执行(Alembic,`RUN_MIGRATIONS_ON_STARTUP=true`);多 pod 可设为 `false`
+> 并用 `aegra db upgrade` 带外执行。横向扩展:共享托管 `REDIS_URL`,每实例并发 `WORKER_COUNT × N_JOBS_PER_WORKER`(默认 30)。
 
 ## 多 Agent / 隔离(无租户)
 
