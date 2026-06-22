@@ -1,6 +1,6 @@
 """skill / agent 管理路由(挂 ``aegra.json`` 的 ``http.app``,按 agent=assistant_id)。
 
-skill 文件级 CRUD + 删 skill / 清 agent。内网信任,无鉴权(交前置网关管控)。
+skill 文件级 CRUD + 删 skill。内网信任,无鉴权(交前置网关管控)。
 """
 
 from __future__ import annotations
@@ -98,8 +98,3 @@ def delete_skill_file(name: str, path: str, agent: str = "default") -> dict[str,
     if not ok:
         raise HTTPException(status_code=404, detail="skill file not found")
     return {"deleted": path}
-
-
-@app.delete("/agents/{agent}", tags=["Agent"])
-def purge(agent: str) -> dict[str, bool]:
-    return {"purged": storage.purge_agent(_root(agent))}

@@ -582,7 +582,7 @@ def test_purge_agent(tmp_path) -> None:  # type: ignore[no-untyped-def]
 
 
 def test_routes() -> None:
-    """skill / skill 文件 / agent 清理路由(按 agent=assistant_id)。"""
+    """skill / skill 文件路由(按 agent=assistant_id)。"""
     pytest.importorskip("fastapi")
     from agentos.routes import app
 
@@ -591,7 +591,6 @@ def test_routes() -> None:
         "/skills",
         "/skills/{name}",
         "/skills/{name}/files",
-        "/agents/{agent}",
     } <= paths
     assert any(p and p.startswith("/skills/{name}/files/") for p in paths)
 

@@ -118,7 +118,7 @@ OpenAI 兼容端点 / 第三方网关(litellm 等)——**无任何默认,连接
 │   ├── graph.py            # Aegra async 工厂:按 (agent, 配置+skill 指纹) 装配 + cachetools 缓存 + per-key 锁
 │   ├── storage.py          # assistant 磁盘存储:路径/生命周期 + skill 发现与 CRUD
 │   ├── auth.py             # Aegra 鉴权:请求头 x-tenant-id / x-user-id → {identity}
-│   └── routes.py           # /skills + /agents/{agent} 管理路由(挂 aegra.json http.app)
+│   └── routes.py           # /skills 管理路由(挂 aegra.json http.app)
 └── tests/test_smoke.py
 ```
 
@@ -208,8 +208,6 @@ AGENT_WORKSPACE/<agent>/                       # 该 assistant 的 backend root(
 1. 代码:`from agentos import list_skills, write_skill_file, delete_skill`(见 [storage.py](src/agentos/storage.py));
 2. HTTP(见 [routes.py](src/agentos/routes.py)):`GET /skills` 与文件级 `GET/PUT/PATCH/DELETE /skills/{name}/files/{path}`(按 `agent=<id>`)。
 
-**删除 agent**:Aegra `DELETE /assistants/{id}` 只删记录、无生命周期钩子,故网关删除成功后应调
-`DELETE /agents/{id}`(agentos),删该 agent 的整个 backend root(`purge_agent`,返回 `{"purged": true}`)。
 
 ### 本地验证(curl)
 
