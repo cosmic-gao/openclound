@@ -1,6 +1,6 @@
 """skill / agent 管理路由(挂 ``aegra.json`` 的 ``http.app``,按 agent=assistant_id)。
 
-skill 文件级 CRUD + 删 skill / 清 agent。无鉴权(内网放行;custom routes 默认不鉴权)。
+skill 文件级 CRUD + 删 skill / 清 agent。内网信任,无鉴权(交前置网关管控)。
 """
 
 from __future__ import annotations

@@ -117,6 +117,7 @@ OpenAI 兼容端点 / 第三方网关(litellm 等)——**无任何默认,连接
 │   ├── builder.py          # build_agent:按 ResolvedConfig 组装 deep agent
 │   ├── graph.py            # Aegra async 工厂:按 (agent, 配置+skill 指纹) 装配 + cachetools 缓存 + per-key 锁
 │   ├── storage.py          # assistant 磁盘存储:路径/生命周期 + skill 发现与 CRUD
+│   ├── auth.py             # Aegra 鉴权:请求头 x-tenant-id / x-user-id → {identity}
 │   └── routes.py           # /skills + /agents/{agent} 管理路由(挂 aegra.json http.app)
 └── tests/test_smoke.py
 ```
@@ -170,27 +171,28 @@ docker compose up -d --build     # http://localhost:2026(启动自动迁移);等
 > 迁移默认启动时自动执行(Alembic,`RUN_MIGRATIONS_ON_STARTUP=true`);多 pod 设 `false` 并用
 > `aegra db upgrade` 带外执行。横向扩展:共享 `REDIS_URL`,每实例并发 `WORKER_COUNT × N_JOBS_PER_WORKER`(默认 30)。
 
-## 多 Agent / 隔离(无租户、无内置鉴权)
+## 多 Agent / 隔离
 
-**两方分工**——鉴权 / agent / 会话走前置网关 + Aegra 原生,agentos 只补 skill + 记忆 + 装配:
+**两方分工**——agentos 从请求头派生 identity + skill / 记忆 / 装配,agent / 会话 / 持久化走 Aegra 原生:
 
 ```
-终端用户 → 业务方网关(鉴权 · RBAC/配额 · 唯一入口)
-         → Aegra:2026(+ agentos,仅内网,AUTH_TYPE=noop)→ Postgres + 本地磁盘
+终端用户 → 业务方网关(RBAC/配额 · 注入 X-Tenant-Id + X-User-Id · 唯一入口)
+         → Aegra:2026(+ agentos,内网信任)→ Postgres + 本地磁盘
 ```
 
-### 鉴权(已移除,交前置网关)
+### 鉴权(内网信任:tenant + user)
 
-agentos 自身**不做鉴权**:Aegra 以 `AUTH_TYPE=noop` 运行(`aegra.json` 无 `auth` 段),仅内网部署、
-客户端不直连,身份与跨用户访问控制全部交前置网关(网络隔离即信任边界,**无 ServiceKey、无租户**)。
-若需公网直连,可在 Aegra 侧接 `AUTH_TYPE=custom` 的 JWT/OAuth handler(本包不内置)。
+`AUTH_TYPE=custom` 时,[auth.py](src/agentos/auth.py) 直接从请求头取 `X-Tenant-Id` / `X-User-Id`
+(缺省 `default` / `anonymous`),组成 `identity = "<tenant_id>:<user_id>"`(透出 `tenant_id`、`user_id`
+字段),不做令牌校验——信任前置网关已鉴权。Aegra 据 `identity` 把 thread / run 按 (租户, 用户) 私有。
+设 `AUTH_TYPE=noop` 则不派生 identity(全部共享)。
 
 ### 资源归属与隔离
 
 | 资源 | 隔离 | 谁实现 |
 |---|---|---|
 | **assistant**(= agent) | 由 Aegra `/assistants` 管理 | **Aegra 原生** |
-| **会话** thread/run/历史 | 由前置网关按其身份策略隔离(noop 下 Aegra 不再按 identity 私有) | 网关 + Aegra checkpointer |
+| **会话** thread/run/历史 | 按 (租户, 用户) 私有(`identity=tenant_id:user_id`;`noop` 时共享) | **Aegra 原生** + checkpointer |
 | **backend root**(skill + 运行期文件 + 记忆) | **per-assistant**(`<workspace>/<agent>`,scope 来自 `config.configurable.agent`) | agentos 磁盘 + 平台 store |
 
 > agentos 只负责 per-assistant 的磁盘 / 记忆隔离(与鉴权层无关);跨用户 / 跨资源访问控制由网关在入口做。
@@ -217,13 +219,15 @@ AGENT_WORKSPACE/<agent>/                       # 该 assistant 的 backend root(
 ```bash
 docker compose up -d --build   # http://127.0.0.1:2026(或 Linux/WSL: uv run aegra serve)
 
+# 内网信任:每个请求带 X-Tenant-Id / X-User-Id(标识租户与用户;由前置网关注入)
+
 # 建 agent(连接放 config.configurable,必须显式分配)
-curl -X POST http://127.0.0.1:2026/assistants -H "Content-Type: application/json" \
+curl -X POST http://127.0.0.1:2026/assistants -H "X-Tenant-Id: acme" -H "X-User-Id: alice" -H "Content-Type: application/json" \
   -d '{"assistant_id":"a1","graph_id":"agentos","config":{"configurable":{"agent":"a1","model":"claude-sonnet-4-6","base_url":"https://your-gateway/v1","api_key":"sk-..."}}}'
 
-# 开会话并发消息(noop:无需鉴权头)
-curl -X POST http://127.0.0.1:2026/threads -d '{"thread_id":"t1","if_exists":"do_nothing"}'
-curl -N -X POST http://127.0.0.1:2026/threads/t1/runs/stream -H "Content-Type: application/json" \
+# 开会话并发消息(identity=tenant_id:user_id → 会话按租户+用户私有)
+curl -X POST http://127.0.0.1:2026/threads -H "X-Tenant-Id: acme" -H "X-User-Id: alice" -d '{"thread_id":"t1","if_exists":"do_nothing"}'
+curl -N -X POST http://127.0.0.1:2026/threads/t1/runs/stream -H "X-Tenant-Id: acme" -H "X-User-Id: alice" -H "Content-Type: application/json" \
   -d '{"assistant_id":"a1","input":{"messages":[{"type":"human","content":"hello"}]}}'
 ```
 
@@ -256,7 +260,7 @@ curl -N -X POST http://127.0.0.1:2026/threads/t1/runs/stream -H "Content-Type: a
 - **shell(跨平台)**:`execute` 未裁剪时用 `LocalShellBackend`(Windows `cmd` / POSIX `/bin/sh`);
   `tools.bash=false` 退回 `FilesystemBackend`。
 - **持久化**:图以 platform-managed 暴露,自身不带 checkpointer / store,由 Aegra(Postgres)运行时注入。
-- **安全**:Aegra 仅内网、客户端不直连;`agent` / skill 名经 `safe_segment` 校验,杜绝目录穿越。
+- **安全**:`AUTH_TYPE=custom` 经 [auth.py](src/agentos/auth.py) 从请求头取 tenant / user 作 identity(内网信任);`agent` / skill 名经 `safe_segment` 校验,杜绝目录穿越。
 
 > 基于 deepagents `>=0.6.11`、langchain `1.3.x`、langgraph `1.2.x`。
 > 代码内字符串为英文,注释与文档为中文。

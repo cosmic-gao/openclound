@@ -1,6 +1,6 @@
 """Aegra 部署入口:async 工厂图,按 ``(agent, 配置+skill 指纹)`` 缓存编译图。
 
-图不带 checkpointer / store(平台注入);scope 仅 agent(无租户),鉴权交平台(默认 noop)。
+图不带 checkpointer / store(平台注入);scope 仅 agent(无租户),鉴权由 auth.py 处理。
 """
 
 from __future__ import annotations

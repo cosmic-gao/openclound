@@ -594,3 +594,23 @@ def test_routes() -> None:
         "/agents/{agent}",
     } <= paths
     assert any(p and p.startswith("/skills/{name}/files/") for p in paths)
+
+
+# ————————————————————————— auth(内网信任:tenant / user) —————————————————————————
+
+
+def test_auth_identity() -> None:
+    """custom 鉴权(内网信任):identity=tenant_id:user_id(tenant_id/user_id 透出)。"""
+    from agentos.auth import authenticate
+
+    full = {"x-tenant-id": "acme", "x-user-id": "alice"}
+    assert asyncio.run(authenticate(full)) == {
+        "identity": "acme:alice",
+        "tenant_id": "acme",
+        "user_id": "alice",
+    }
+    assert asyncio.run(authenticate({})) == {
+        "identity": "default:anonymous",
+        "tenant_id": "default",
+        "user_id": "anonymous",
+    }

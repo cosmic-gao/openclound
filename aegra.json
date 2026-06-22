@@ -6,5 +6,8 @@
   },
   "http": {
     "app": "./src/agentos/routes.py:app"
+  },
+  "auth": {
+    "path": "./src/agentos/auth.py:auth"
   }
 }

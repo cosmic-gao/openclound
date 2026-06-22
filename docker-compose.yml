@@ -1,9 +1,7 @@
-# 自包含栈:agentos + 内置 Postgres(pg14) + Redis。
-# cp .env.example .env && 填 OPENAI_* / POSTGRES_PASSWORD && docker compose up -d --build
-# 改用托管库:在 .env 设 DATABASE_URL(优先于 POSTGRES_*),并可注释掉 postgres 服务。
+# 启动:docker compose up -d --build
+# 停止:docker compose down
 
 services:
-  # PostgreSQL 14(+ pgvector,留作日后语义检索;Aegra 持久化:checkpointer/线程/运行/store)
   postgres:
     image: pgvector/pgvector:pg14
     restart: unless-stopped
@@ -19,7 +17,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # Redis:多实例 SSE 广播(pub/sub + replay)+ worker 任务队列
   redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -33,7 +30,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # agentos(Aegra serve;启动自动迁移)
   agentos:
     build:
       context: .
@@ -43,7 +39,6 @@ services:
     env_file:
       - .env
     environment:
-      # 容器内连内置服务(覆盖 .env 里给本地直跑用的 localhost)
       - POSTGRES_HOST=postgres
       - REDIS_BROKER_ENABLED=true
       - REDIS_URL=redis://redis:6379/0
