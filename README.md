@@ -124,17 +124,15 @@ OpenAI 兼容端点 / 第三方网关(litellm 等)——**无任何默认,连接
 
 ## 快速开始
 
-需 **uv** 与 **Docker**(`aegra dev` 用 Docker 起内置 Postgres);Python **>=3.12**(随 `aegra-cli`)。
+需 **Docker**(compose 自带 Postgres + Redis)。`.env.example` 默认连内置服务(`POSTGRES_HOST=postgres`、Redis 开)。
 
 ```bash
-uv sync                      # 装依赖(含 aegra-cli + aegra-api;首次自动建 .venv)
-cp .env.example .env         # 填 OPENAI_*(模型也可走 assistant config)与 POSTGRES_PASSWORD
-uv run aegra dev             # 自动起 Postgres 容器 + 跑迁移 + uvicorn 热重载
-                             # → http://localhost:2026(API 文档 /docs)
+cp .env.example .env             # 填 OPENAI_*(模型也可走 assistant config)与 POSTGRES_PASSWORD
+docker compose up -d --build     # → http://localhost:2026(API 文档 /docs;启动自动迁移)
 ```
 
-`aegra dev` 自动:发现 `aegra.json` → Docker 起内置 `postgres` → Alembic 迁移 → 热重载。默认
-`REDIS_BROKER_ENABLED=false`(单进程,无需 Redis);要全栈(含 Redis worker 队列)见下「部署」。
+> 主机直跑 `uv run aegra dev`(`uv sync` 后,Docker 起 Postgres + 热重载)时,先把 `.env` 改回本地连接:
+> `POSTGRES_HOST=localhost`、`REDIS_URL=redis://localhost:6379/0`、`REDIS_BROKER_ENABLED=false`。
 
 ### 开发命令
 
@@ -158,15 +156,14 @@ cp .env.example .env             # 填 OPENAI_* + POSTGRES_PASSWORD
 docker compose up -d --build     # http://localhost:2026(启动自动迁移);等价封装:uv run aegra up
 ```
 
-> 连接默认用 `POSTGRES_*` 字段(compose 内 agentos 服务把 `POSTGRES_HOST` 覆盖为 `postgres`、
-> `REDIS_BROKER_ENABLED` 覆盖为 `true`、`REDIS_URL` 指向内置 redis)。改用**托管库**:在 `.env` 设
-> `DATABASE_URL`(优先于 `POSTGRES_*`,支持 `sslmode`,`@`→`%40`),并可注释掉内置 `postgres`。Redis TLS 用 `rediss://`。
+> 连接全部经 `.env`(compose 不写死;`.env.example` 默认 `POSTGRES_HOST=postgres`、Redis 开、迁移开)。
+> 改用**托管库**:在 `.env` 设 `DATABASE_URL`(优先于 `POSTGRES_*`,支持 `sslmode`,`@`→`%40`),并可注释掉内置 `postgres`。Redis TLS 用 `rediss://`。
 
 启动方式按场景:
 
-- **本地开发** → `uv run aegra dev`(见「快速开始」:Docker 起 Postgres + 热重载,单进程免 Redis)。
-- **全栈(含 Redis)** → `docker compose up -d --build` 或 `uv run aegra up`。
-- **无 Docker 直跑(PaaS / K8s / 裸机)** → 自备库后 `uv run aegra serve`(生产模式,不热重载;HOST/PORT 经 `.env`)。
+- **全栈(默认)** → `docker compose up -d --build` 或 `uv run aegra up`(`.env` 即 compose 取向)。
+- **主机直跑** → `.env` 改回本地连接(localhost / Redis 关)后 `uv run aegra dev`(热重载)或 `uv run aegra serve`(生产)。
+- **托管库 / 自备库** → `.env` 设 `DATABASE_URL`,`uv run aegra serve`。
 
 > 迁移默认启动时自动执行(Alembic,`RUN_MIGRATIONS_ON_STARTUP=true`);多 pod 设 `false` 并用
 > `aegra db upgrade` 带外执行。横向扩展:共享 `REDIS_URL`,每实例并发 `WORKER_COUNT × N_JOBS_PER_WORKER`(默认 30)。
