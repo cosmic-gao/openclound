@@ -8,7 +8,12 @@ RUN addgroup --system app && adduser --system --ingroup app app
 
 FROM base AS builder
 
-COPY --from=ghcr.io/astral-sh/uv:0.10.0 /uv /bin/uv
+# uv 经 pip 安装(避开 ghcr.io 拉取不稳定)。PyPI 源经 build-arg PIP_INDEX_URL 注入
+# (默认官方源,可在 .env 覆盖);pip 与 uv 共用同一源。
+ARG PIP_INDEX_URL=https://pypi.org/simple
+ENV PIP_INDEX_URL=${PIP_INDEX_URL} \
+    UV_INDEX_URL=${PIP_INDEX_URL}
+RUN pip install --no-cache-dir uv==0.10.0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential libpq-dev \
