@@ -1,8 +1,4 @@
-"""加载 MCP server 工具(逐 server 容错)。
-
-基于 ``langchain-mcp-adapters``;其工具每次调用新建临时会话(无需关闭),但多 server 加载
-无异常隔离,故本模块逐 server 加载:失败仅记 warning 跳过,不拖垮其余工具。
-"""
+"""加载 per-agent MCP 工具,逐 server 容错(单 server 失败仅 warning 跳过,不拖垮其余)。"""
 
 from __future__ import annotations
 
@@ -19,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 async def load_mcp_tools(servers: dict[str, dict[str, Any]]) -> list[BaseTool]:
-    """逐 server 异步加载 MCP 工具,单 server 失败仅跳过;工具名以 server 名为前缀。"""
+    """逐 server 异步加载 MCP 工具(失败跳过);工具名以 server 名为前缀。"""
     if not servers:
         return []
 

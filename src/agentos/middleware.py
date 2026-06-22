@@ -1,7 +1,4 @@
-"""agent 中间件:自定义中间件(ToolFilter / RubricSeedMiddleware)+ 健壮性 / 审核装配。
-
-build_middleware:重试/上限/回退/上下文清理/PII/文件搜索;build_review_middleware:审核。
-"""
+"""agent 中间件:ToolFilter / RubricSeed 自定义件 + 健壮性(重试/上限/回退/PII/文件搜索)与审核装配。"""
 
 from __future__ import annotations
 
@@ -10,8 +7,6 @@ from typing import TYPE_CHECKING, Any, NotRequired
 from deepagents.middleware.rubric import RubricMiddleware
 from langchain.agents.middleware import (
     AgentMiddleware,
-    ClearToolUsesEdit,
-    ContextEditingMiddleware,
     FilesystemFileSearchMiddleware,
     ModelCallLimitMiddleware,
     ModelFallbackMiddleware,
@@ -33,8 +28,7 @@ if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
     from langgraph.runtime import Runtime
 
-    from agentos.config import Settings
-    from agentos.spec import ResolvedConfig
+    from agentos.config import ResolvedConfig, Settings
 
 _PII_TYPES = ("email", "credit_card", "ip", "mac_address")  # url 误伤率高,不纳入
 
@@ -135,12 +129,6 @@ def build_middleware(
                     api_key=resolved.api_key,
                     max_retries=settings.model_max_retries,
                 )
-            )
-        )
-    if settings.context_edit_trigger_tokens > 0:
-        mw.append(
-            ContextEditingMiddleware(
-                edits=[ClearToolUsesEdit(trigger=settings.context_edit_trigger_tokens)]
             )
         )
     if resolved.pii_strategy != "off":

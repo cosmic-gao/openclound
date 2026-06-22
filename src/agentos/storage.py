@@ -1,8 +1,4 @@
-"""assistant 的磁盘存储:backend root = ``<base>/<agent>``,skill 在其下 ``skills/``。
-
-路径与生命周期(agent_root / init / purge)、build 期 skill 发现(sources / signature)、
-skill 与其文件的 CRUD(列表 / 读 / 写 / 改名 / 删)。skill 按 assistant 隔离。
-"""
+"""assistant 磁盘存储:root = ``<base>/<agent>``;含路径、skill 发现与文件级 CRUD。"""
 
 from __future__ import annotations
 

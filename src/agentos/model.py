@@ -17,10 +17,7 @@ def build_model(
     model_params: dict[str, Any] | None = None,
     max_retries: int = 2,
 ) -> ChatOpenAI:
-    """构造 :class:`ChatOpenAI`;缺 ``model``/``base_url``/``api_key`` 任一即报错。
-
-    ``temperature`` / ``model_params`` 仅在显式提供时透传。
-    """
+    """构造 ChatOpenAI;model/base_url/api_key 缺一即报错;temperature/model_params 仅显式透传。"""
     missing = [
         name
         for name, value in (

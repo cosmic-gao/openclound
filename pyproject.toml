@@ -3,13 +3,12 @@ name = "agentos"
 version = "0.1.0"
 description = "agentos: 通用 agent 包(封装 LangChain deepagents)，集成 OpenAI 兼容端点 / MCP / skills,per-assistant 隔离,类 Claude Code,可作 Aegra 部署。"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = "MIT"
 authors = [{ name = "August Gao", email = "August.Gao@mspbots.ai" }]
 keywords = ["deepagents", "langchain", "langgraph", "agents", "anthropic", "mcp", "litellm"]
 classifiers = [
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Intended Audience :: Developers",
@@ -25,12 +24,10 @@ dependencies = [
     "pydantic>=2.0,<3.0",
     "pydantic-settings>=2.0,<3.0",
     "python-dotenv>=1.0,<2.0",
+    # Aegra 部署运行时(self-hosted LangGraph Platform):提供 `aegra dev/serve/up` CLI,并拉入 aegra-api。
+    # 需 Python >=3.12(故本项目 requires-python>=3.12)。
+    "aegra-cli>=0.9,<1.0",
 ]
-
-[project.optional-dependencies]
-# Aegra 部署(self-hosted LangGraph Platform):uv sync --extra aegra
-# aegra-cli 仅支持 Python >=3.12;库本身仍兼容 3.11(该 extra 在 3.11 下为空)。
-aegra = ['aegra-cli>=0.9; python_version >= "3.12"']
 
 [project.urls]
 Homepage = "https://github.com/mspbots/openclound"
@@ -55,13 +52,13 @@ line-length = 88
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 
-# agentos.http 是 Aegra 部署胶水,依赖 fastapi(仅 --extra aegra 安装),
+# agentos.routes 是 Aegra 部署胶水,依赖 fastapi(随 aegra-api 安装),
 # 不纳入核心严格类型检查(部署期由 Aegra 运行时校验)。
 [[tool.mypy.overrides]]
-module = ["agentos.http"]
+module = ["agentos.routes"]
 ignore_errors = true
 
 [tool.pytest.ini_options]

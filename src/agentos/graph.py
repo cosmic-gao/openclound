@@ -1,7 +1,6 @@
-"""Aegra 部署入口:async 工厂图,按 ``(agent, 配置 + skill 指纹)`` 装配并缓存编译图。
+"""Aegra 部署入口:async 工厂图,按 ``(agent, 配置+skill 指纹)`` 缓存编译图。
 
-每请求 ``await`` 调用;图不带 checkpointer / store(平台注入)。无租户:scope 仅 agent,
-backend root = ``<workspace>/<agent>``,会话历史由 Aegra 按用户私有。
+图不带 checkpointer / store(平台注入);scope 仅 agent(无租户),鉴权交平台(默认 noop)。
 """
 
 from __future__ import annotations
@@ -13,14 +12,13 @@ from weakref import WeakValueDictionary
 from cachetools import TTLCache
 
 from agentos.builder import build_agent
-from agentos.config import AgentConfig, get_settings, safe_segment
+from agentos.config import AgentConfig, fingerprint, get_settings, resolve, safe_segment
 from agentos.mcp import load_mcp_tools
-from agentos.spec import fingerprint, resolve
 from agentos.storage import agent_root, skill_signature, skill_sources
 
-#: 编译图缓存(键 = (agent, 指纹);LRU + TTL)。指纹含 skill 签名,故 skill 增删触发重建。
+#: 编译图缓存(LRU+TTL;键含 skill 签名,故 skill 增删触发重建)。
 _CACHE: TTLCache[tuple[str, str], Any] = TTLCache(maxsize=256, ttl=3600)
-#: per-key 锁(singleflight):同 key 并发构建去重,不同 agent 冷启动互不阻塞。
+#: per-key 锁(singleflight):同 key 并发构建去重。
 _LOCKS: WeakValueDictionary[tuple[str, str], asyncio.Lock] = WeakValueDictionary()
 
 

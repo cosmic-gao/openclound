@@ -150,7 +150,7 @@ def test_parse_agent_config_ignores_scope_fields() -> None:
 
 
 def test_resolve_defaults() -> None:
-    from agentos.spec import DEFAULT_PROMPT
+    from agentos.config import DEFAULT_PROMPT
 
     r = _resolved()
     assert r.review_enabled is False
@@ -169,7 +169,7 @@ def test_review_activates_on_rubric() -> None:
 
 def test_pipeline_prompt_opt_in() -> None:
     """纪律提示按需注入 config.prompt(不再有 pipeline mode)。"""
-    from agentos.spec import PIPELINE_PROMPT
+    from agentos.config import PIPELINE_PROMPT
 
     r = _resolved(prompt=PIPELINE_PROMPT)
     assert "RETRIEVE" in r.prompt
@@ -183,7 +183,7 @@ def test_resolve_tools_permission_to_excluded_interrupt() -> None:
 
 
 def test_resolve_prompt_appends_user() -> None:
-    from agentos.spec import DEFAULT_PROMPT
+    from agentos.config import DEFAULT_PROMPT
 
     r = _resolved(prompt="SCENE")
     assert r.prompt.startswith(DEFAULT_PROMPT)
@@ -310,7 +310,6 @@ def test_build_middleware_default() -> None:
     names = {type(m).__name__ for m in mw}
     assert "ModelRetryMiddleware" in names
     assert "ToolRetryMiddleware" in names
-    assert "ContextEditingMiddleware" in names
 
 
 def test_build_middleware_steps_and_fallback() -> None:
@@ -523,18 +522,6 @@ def test_config_reads_only_configurable() -> None:
     assert _resolve_scope({"agent": "flat"}) == "default"  # 扁平 agent 被忽略
 
 
-# ————————————————————————— auth(内网,identity-only) —————————————————————————
-
-
-def test_auth_resolve_identity() -> None:
-    """内网信任:读 X-User-Id 为 identity;无租户维度。"""
-    from agentos.auth import resolve_identity
-
-    assert resolve_identity({"x-user-id": "alice"}) == {"identity": "alice"}
-    assert resolve_identity({}) == {"identity": "anonymous"}
-    assert "tenant" not in resolve_identity({"x-user-id": "a", "x-tenant-id": "t"})
-
-
 # ————————————————————————— skill CRUD / 安全 —————————————————————————
 
 
@@ -594,11 +581,10 @@ def test_purge_agent(tmp_path) -> None:  # type: ignore[no-untyped-def]
     assert purge_agent(root) is False
 
 
-def test_http_routes() -> None:
+def test_routes() -> None:
     """skill / skill 文件 / agent 清理路由(按 agent=assistant_id)。"""
     pytest.importorskip("fastapi")
-    pytest.importorskip("aegra_api")
-    from agentos.http import app
+    from agentos.routes import app
 
     paths = {getattr(r, "path", None) for r in app.routes}
     assert {

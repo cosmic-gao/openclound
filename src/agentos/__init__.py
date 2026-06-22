@@ -1,19 +1,22 @@
-"""openclound ``agentos``:config 驱动、双形态、跨会话记忆的生产级 agent 基础包。
+"""agentos:封装 LangChain ``deepagents``、经 Aegra 部署的 config 驱动 agent 基础包。
 
-封装 LangChain ``deepagents``,作为 **Aegra 项目**部署(图入口见 ``graph.py``)。
-形态与开关由每个 assistant 的 ``config.configurable`` 决定(见 :class:`AgentConfig`)。
-模型统一经 ``langchain_openai`` 接入任意兼容端点 / 网关;
-连接 per-assistant 必填,缺失回退 env。
+行为由每个 assistant 的 ``config.configurable`` 决定(见 :class:`AgentConfig`);
+模型统一经 ``langchain_openai`` 接入,连接 per-assistant 必填、缺失回退 env。
 """
 
 from agentos.builder import AGENT_NAME, build_agent
 from agentos.config import (
+    DEFAULT_PROMPT,
+    PIPELINE_PROMPT,
     AgentConfig,
     Permission,
     PIIStrategy,
+    ResolvedConfig,
     ReviewConfig,
     Settings,
+    fingerprint,
     get_settings,
+    resolve,
     resolve_path,
     safe_segment,
 )
@@ -21,13 +24,6 @@ from agentos.mcp import load_mcp_tools
 from agentos.memory import MEMORY_FILE, build_backend, memory_sources
 from agentos.middleware import ToolFilter, build_middleware, build_review_middleware
 from agentos.model import build_model
-from agentos.spec import (
-    DEFAULT_PROMPT,
-    PIPELINE_PROMPT,
-    ResolvedConfig,
-    fingerprint,
-    resolve,
-)
 from agentos.storage import (
     agent_root,
     delete_skill,

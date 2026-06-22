@@ -1,11 +1,12 @@
-"""配置:进程级 ``Settings``(运行参数,无连接)+ 请求级 ``AgentConfig``(per-assistant)。
+"""配置:进程级 ``Settings`` + 请求级 ``AgentConfig``,``resolve`` 合并为 ``ResolvedConfig``。
 
-连接(model/base_url/api_key)必须 per-assistant 显式分配,无默认;由
-:func:`agentos.spec.resolve` 合并为最终开关。
+连接(model/base_url/api_key)per-assistant 显式分配,缺失回退 env,无硬编码默认。
 """
 
 from __future__ import annotations
 
+import json
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -26,9 +27,30 @@ TOOL_ALIASES: dict[str, str] = {
     "task": "task",
 }
 
+#: 基础系统指令(自由 ReAct;叠加在 config.prompt 之前)。
+DEFAULT_PROMPT = (
+    "You are a capable deep agent operating in a ReAct loop: think, call tools, "
+    "observe results, and repeat. Use the todo tool to plan multi-step work, keep "
+    "working notes in the file system, consult your skills for domain workflows, and "
+    "delegate isolated subtasks to subagents. Be thorough and verify before finishing."
+)
+
+#: 可选纪律提示:放进 config.prompt 即得「检索→规划→执行→审核」管线行为。
+PIPELINE_PROMPT = (
+    "Follow a disciplined four-phase workflow:\n"
+    "1. RETRIEVE — gather evidence first: search files (grep/glob), read sources, "
+    "query MCP tools, and consult your skills before acting. Do not guess.\n"
+    "2. PLAN — break the task into a todo list (write_todos) before executing.\n"
+    "3. EXECUTE — carry out the plan step by step, keeping working notes in the file "
+    "system and delegating isolated subtasks to subagents.\n"
+    "4. REVIEW — before finishing, verify your work against the acceptance criteria "
+    "and revise until it genuinely meets them.\n"
+    "Be rigorous: evidence before claims, plan before action, verify before done."
+)
+
 
 class Settings(BaseSettings):
-    """进程级配置;含模型连接默认(env),assistant config 缺失对应项时回退到此。"""
+    """进程级配置;连接默认(env)在 assistant config 缺失对应项时回退到此。"""
 
     model_config = SettingsConfigDict(
         env_prefix="AGENT_",
@@ -40,23 +62,21 @@ class Settings(BaseSettings):
 
     workspace: str = ".agent"
 
-    # 模型连接默认(env);assistant config 未配对应项时回退到此,无硬编码默认。
     model: str | None = None  # AGENT_MODEL
     base_url: str | None = Field(default=None, validation_alias="OPENAI_BASE_URL")
     api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
-    temperature: float | None = None  # AGENT_TEMPERATURE
-    fallback_model: str | None = None  # AGENT_FALLBACK_MODEL
+    temperature: float | None = None
+    fallback_model: str | None = None
 
     model_max_retries: int = 2
     tool_max_retries: int = 2
     tool_call_limit: int | None = None
-    context_edit_trigger_tokens: int = 100_000
     pii_strategy: PIIStrategy = "off"
     enable_file_search: bool = False
 
 
 class ReviewConfig(BaseModel):
-    """审核开关(装配见 :func:`agentos.middleware.build_review_middleware`)。"""
+    """审核开关;装配见 ``build_review_middleware``。"""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -95,6 +115,29 @@ class AgentConfig(BaseModel):
             return cls()
 
 
+@dataclass(frozen=True)
+class ResolvedConfig:
+    """:func:`resolve` 产出的只读最终开关,供 ``build_agent`` 消费。"""
+
+    model: str | None
+    base_url: str | None
+    api_key: str | None
+    prompt: str
+    temperature: float | None
+    steps: int | None
+    excluded_tools: list[str] = field(default_factory=list)
+    interrupt_on: dict[str, bool] = field(default_factory=dict)
+    review_enabled: bool = False
+    rubric: str | None = None
+    review_max_iterations: int = 3
+    mcp_servers: dict[str, dict[str, Any]] = field(default_factory=dict)
+    model_params: dict[str, Any] = field(default_factory=dict)
+    memory: bool = False
+    fallback_model: str | None = None
+    pii_strategy: PIIStrategy = "off"
+    enable_file_search: bool = False
+
+
 def get_settings() -> Settings:
     return Settings()
 
@@ -110,3 +153,58 @@ def safe_segment(name: str) -> str:
         msg = f"invalid name segment: {name!r}"
         raise ValueError(msg)
     return name
+
+
+def _resolve_tools(cfg: AgentConfig) -> tuple[list[str], dict[str, bool]]:
+    """``tools``/``permission`` → ``(excluded_tools, interrupt_on)``。"""
+    excluded: list[str] = []
+    interrupt: dict[str, bool] = {}
+    for cname, dname in TOOL_ALIASES.items():
+        if cfg.tools.get(cname) is False or cfg.permission.get(cname) == "deny":
+            excluded.append(dname)
+        elif cfg.permission.get(cname) == "ask":
+            interrupt[dname] = True
+    return excluded, interrupt
+
+
+def resolve(cfg: AgentConfig, settings: Settings) -> ResolvedConfig:
+    """合并 ``AgentConfig`` + ``Settings``(显式 config 优先,缺失回退 env)。"""
+    prompt = f"{DEFAULT_PROMPT}\n\n{cfg.prompt}" if cfg.prompt else DEFAULT_PROMPT
+    excluded, interrupt = _resolve_tools(cfg)
+    review_enabled = (
+        cfg.review.enabled
+        if cfg.review.enabled is not None
+        else bool(cfg.review.rubric)
+    )
+    return ResolvedConfig(
+        model=cfg.model or settings.model,
+        base_url=cfg.base_url or settings.base_url,
+        api_key=cfg.api_key or settings.api_key,
+        prompt=prompt,
+        temperature=(
+            cfg.temperature if cfg.temperature is not None else settings.temperature
+        ),
+        steps=cfg.steps,
+        excluded_tools=excluded,
+        interrupt_on=interrupt,
+        review_enabled=review_enabled,
+        rubric=cfg.review.rubric,
+        review_max_iterations=cfg.review.max_iterations,
+        mcp_servers=dict(cfg.mcp),
+        model_params=dict(cfg.model_params),
+        memory=cfg.memory,
+        fallback_model=cfg.fallback_model or settings.fallback_model,
+        pii_strategy=cfg.pii_strategy or settings.pii_strategy,
+        enable_file_search=(
+            cfg.enable_file_search
+            if cfg.enable_file_search is not None
+            else settings.enable_file_search
+        ),
+    )
+
+
+def fingerprint(resolved: ResolvedConfig, skill_sig: str = "") -> str:
+    """图缓存键:序列化影响图结构的配置(剔除 api_key)+ skill 签名。"""
+    data = {k: v for k, v in asdict(resolved).items() if k != "api_key"}
+    data["skills"] = skill_sig
+    return json.dumps(data, sort_keys=True, ensure_ascii=False)

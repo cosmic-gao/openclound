@@ -80,7 +80,7 @@ OpenAI 兼容端点 / 第三方网关(litellm 等)——**无任何默认,连接
 | Skills | per-agent 磁盘 skill(`SKILL.md` + 多文件 / 脚本),**按 assistant 隔离**,增删触发热重建 |
 | **跨会话记忆** | `config.memory` 开启;`/memories` 路由到平台 store,按 assistant 命名空间持久 |
 | 审核 | `RubricMiddleware` 自评迭代(pipeline + `rubric`) |
-| 健壮性 | 模型 / 工具自动重试、调用上限(`steps`)、备用模型回退、长上下文清理 |
+| 健壮性 | 模型 / 工具自动重试、调用上限(`steps`)、备用模型回退(长上下文走 deepagents 默认 summarization) |
 | 安全 | per-tool 裁剪 / HITL(`permission`)、可选 PII 脱敏、目录穿越防护 |
 | 性能 | 编译图 LRU+TTL 缓存(`cachetools`)、per-key 锁(不同 assistant 冷启动并行) |
 
@@ -104,91 +104,96 @@ OpenAI 兼容端点 / 第三方网关(litellm 等)——**无任何默认,连接
 ```
 .
 ├── aegra.json              # Aegra 部署:注册图 agentos -> graph.py:graph(async 工厂)
-├── docker-compose.yml      # agentos 单服务,连外部托管 Postgres + Redis
-├── Dockerfile              # 多阶段镜像(uv + aegra extra)
-├── pyproject.toml          # uv 项目(依赖 / extra aegra / 工具配置)
-├── .env.example            # 进程级运行参数 + 模型连接默认 + 外部 pg/redis
+├── docker-compose.yml      # 自包含三服务:agentos + Postgres(pg14) + Redis
+├── Dockerfile              # 多阶段镜像(uv sync)
+├── pyproject.toml          # uv 项目(依赖含 aegra-cli / 工具配置)
+├── .env.example            # 模型连接默认 + Aegra 进程级配置 + 内置 pg/redis
 ├── src/agentos/
-│   ├── config.py           # Settings(运行参数)+ AgentConfig/ReviewConfig(per-agent,连接必填)+ parse
-│   ├── spec.py             # resolve():合并 config 为 ResolvedConfig + fingerprint(无 mode)
+│   ├── config.py           # Settings + AgentConfig/ReviewConfig + resolve()→ResolvedConfig + fingerprint
 │   ├── model.py            # build_model():统一经 langchain_openai 构造 ChatOpenAI(无默认)
 │   ├── memory.py           # build_backend + memory_sources:跨会话记忆装配(CompositeBackend + StoreBackend)
 │   ├── mcp.py              # load_mcp_tools():逐 server 容错加载 MCP 工具
-│   ├── middleware.py       # 全部中间件:ToolFilter(裁剪)+ 审核装配 + 健壮性/上下文/PII
+│   ├── middleware.py       # 中间件:ToolFilter(裁剪)+ 审核 + 健壮性(重试/上限/回退)/PII/文件搜索
 │   ├── builder.py          # build_agent:按 ResolvedConfig 组装 deep agent
 │   ├── graph.py            # Aegra async 工厂:按 (agent, 配置+skill 指纹) 装配 + cachetools 缓存 + per-key 锁
 │   ├── storage.py          # assistant 磁盘存储:路径/生命周期 + skill 发现与 CRUD
-│   ├── auth.py             # 内网身份:X-User-Id -> {identity}(无租户)
-│   └── http.py             # /skills + /agents/{agent} 管理路由(挂 aegra.json http.app)
+│   └── routes.py           # /skills + /agents/{agent} 管理路由(挂 aegra.json http.app)
 └── tests/test_smoke.py
 ```
 
-## 安装 / 开发
+## 快速开始
+
+需 **uv** 与 **Docker**(`aegra dev` 用 Docker 起内置 Postgres);Python **>=3.12**(随 `aegra-cli`)。
 
 ```bash
-uv sync                 # 创建 .venv 并安装依赖(含 dev 组)
+uv sync                      # 装依赖(含 aegra-cli + aegra-api;首次自动建 .venv)
+cp .env.example .env         # 填 OPENAI_*(模型也可走 assistant config)与 POSTGRES_PASSWORD
+uv run aegra dev             # 自动起 Postgres 容器 + 跑迁移 + uvicorn 热重载
+                             # → http://localhost:2026(API 文档 /docs)
+```
+
+`aegra dev` 自动:发现 `aegra.json` → Docker 起内置 `postgres` → Alembic 迁移 → 热重载。默认
+`REDIS_BROKER_ENABLED=false`(单进程,无需 Redis);要全栈(含 Redis worker 队列)见下「部署」。
+
+### 开发命令
+
+```bash
 uv run pytest -q        # 测试
 uv run ruff check .     # lint
 uv run ruff format .    # 格式化
 uv run mypy src         # 类型检查
 ```
 
-## 部署(Postgres / Redis 均为托管服务)
+## 部署(自包含:内置 Postgres(pg14) + Redis)
 
 Aegra 用 **Postgres 接管持久化**(checkpointer / 线程 / 运行 / store),对外暴露标准 **Agent Protocol**。
 图工厂是 **async config 工厂** `async def graph(config)`(Aegra 每请求 `await` 调用,按签名注入 `config`),
 内部按 `(agent, 配置 + skill 指纹)` 装配并缓存编译图,**不带 checkpointer / store**(平台运行时注入)。
 
-Postgres / Redis 连接全部经 `.env` 读取(本地与生产同一份):
+`docker-compose.yml` 自带 `postgres`(pg14)+ `redis` + `agentos` 三服务(全栈,含 Redis worker 队列):
 
 ```bash
-cp .env.example .env         # 填托管 DATABASE_URL + REDIS_URL;模型连接走 assistant config
+cp .env.example .env             # 填 OPENAI_* + POSTGRES_PASSWORD
+docker compose up -d --build     # http://localhost:2026(启动自动迁移);等价封装:uv run aegra up
 ```
 
-> 托管库一般强制 SSL,优先用 `DATABASE_URL`(Aegra 自动把 `sslmode` 翻译为 asyncpg 的 `ssl`):
-> `DATABASE_URL=postgresql://user:pwd@host:5432/db?sslmode=require`;Redis TLS 用 `rediss://`。
-> 密码含特殊字符须 URL 编码(`@`→`%40`);分离的 `POSTGRES_*` 字段不支持 `sslmode`。
+> 连接默认用 `POSTGRES_*` 字段(compose 内 agentos 服务把 `POSTGRES_HOST` 覆盖为 `postgres`、
+> `REDIS_BROKER_ENABLED` 覆盖为 `true`、`REDIS_URL` 指向内置 redis)。改用**托管库**:在 `.env` 设
+> `DATABASE_URL`(优先于 `POSTGRES_*`,支持 `sslmode`,`@`→`%40`),并可注释掉内置 `postgres`。Redis TLS 用 `rediss://`。
 
-**本地启动(Windows,已装 uv)**——用 `serve.py`(`aegra serve` 在 Windows 走
-ProactorEventLoop,与 LangGraph 的 psycopg 不兼容;`serve.py` 改用 SelectorEventLoop):
+启动方式按场景:
 
-```bash
-uv sync --extra aegra            # 首次:装依赖(含 aegra-cli,Python >=3.12)
-uv run python serve.py           # 读 .env 连 pg/redis;启动自动迁移;http://localhost:2026
-```
+- **本地开发** → `uv run aegra dev`(见「快速开始」:Docker 起 Postgres + 热重载,单进程免 Redis)。
+- **全栈(含 Redis)** → `docker compose up -d --build` 或 `uv run aegra up`。
+- **无 Docker 直跑(PaaS / K8s / 裸机)** → 自备库后 `uv run aegra serve`(生产模式,不热重载;HOST/PORT 经 `.env`)。
 
-**生产(Docker)**——同一份 `.env`,单 agentos 容器:
+> 迁移默认启动时自动执行(Alembic,`RUN_MIGRATIONS_ON_STARTUP=true`);多 pod 设 `false` 并用
+> `aegra db upgrade` 带外执行。横向扩展:共享 `REDIS_URL`,每实例并发 `WORKER_COUNT × N_JOBS_PER_WORKER`(默认 30)。
 
-```bash
-docker compose up -d --build     # http://localhost:2026
-```
+## 多 Agent / 隔离(无租户、无内置鉴权)
 
-> 迁移默认启动时自动执行(Alembic,`RUN_MIGRATIONS_ON_STARTUP=true`);多 pod 可设为 `false`
-> 并用 `aegra db upgrade` 带外执行。横向扩展:共享托管 `REDIS_URL`,每实例并发 `WORKER_COUNT × N_JOBS_PER_WORKER`(默认 30)。
-
-## 多 Agent / 隔离(无租户)
-
-**两方分工**——agent / 会话走 Aegra 原生,agentos 只补 skill + 记忆 + 双模式装配:
+**两方分工**——鉴权 / agent / 会话走前置网关 + Aegra 原生,agentos 只补 skill + 记忆 + 装配:
 
 ```
-终端用户 → 业务方网关(RBAC/配额 · 身份注入 · 唯一入口)
-         → Aegra:2026(+ agentos,仅内网)→ Postgres + 本地磁盘
+终端用户 → 业务方网关(鉴权 · RBAC/配额 · 唯一入口)
+         → Aegra:2026(+ agentos,仅内网,AUTH_TYPE=noop)→ Postgres + 本地磁盘
 ```
 
-### 身份模型(内网信任,客户端不直连)
+### 鉴权(已移除,交前置网关)
 
-Aegra 仅内网部署,网关在内网注入 `X-User-Id`,[auth.py](src/agentos/auth.py) 产出 `{identity}`
-(网络隔离即信任边界,**无 ServiceKey、无租户**)。Aegra 据 `identity` 把 thread / run 按用户私有。
+agentos 自身**不做鉴权**:Aegra 以 `AUTH_TYPE=noop` 运行(`aegra.json` 无 `auth` 段),仅内网部署、
+客户端不直连,身份与跨用户访问控制全部交前置网关(网络隔离即信任边界,**无 ServiceKey、无租户**)。
+若需公网直连,可在 Aegra 侧接 `AUTH_TYPE=custom` 的 JWT/OAuth handler(本包不内置)。
 
 ### 资源归属与隔离
 
 | 资源 | 隔离 | 谁实现 |
 |---|---|---|
-| **assistant**(= agent) | 由 Aegra `/assistants` 管理(`user_id=identity` + `"system"` 共享) | **Aegra 原生** |
-| **会话** thread/run/历史 | **用户私有**(按 `identity`) | **Aegra 原生** + checkpointer |
-| **backend root**(skill + 运行期文件 + 记忆) | **per-assistant**(`<workspace>/<agent>`) | agentos 磁盘 + 平台 store |
+| **assistant**(= agent) | 由 Aegra `/assistants` 管理 | **Aegra 原生** |
+| **会话** thread/run/历史 | 由前置网关按其身份策略隔离(noop 下 Aegra 不再按 identity 私有) | 网关 + Aegra checkpointer |
+| **backend root**(skill + 运行期文件 + 记忆) | **per-assistant**(`<workspace>/<agent>`,scope 来自 `config.configurable.agent`) | agentos 磁盘 + 平台 store |
 
-> 跨资源访问控制由网关 / Aegra `@auth.on` 在入口做;agentos 只负责 per-assistant 的磁盘 / 记忆隔离。
+> agentos 只负责 per-assistant 的磁盘 / 记忆隔离(与鉴权层无关);跨用户 / 跨资源访问控制由网关在入口做。
 
 ### Skill(每个 assistant 独立)
 
@@ -202,7 +207,7 @@ AGENT_WORKSPACE/<agent>/                       # 该 assistant 的 backend root(
 **热更新**:写 / 删 skill 磁盘 → 改变 skill 签名 → **下个新会话**自动重建图并重扫。两种写入:
 
 1. 代码:`from agentos import list_skills, write_skill_file, delete_skill`(见 [storage.py](src/agentos/storage.py));
-2. HTTP(见 [http.py](src/agentos/http.py)):`GET /skills` 与文件级 `GET/PUT/PATCH/DELETE /skills/{name}/files/{path}`(按 `agent=<id>`)。
+2. HTTP(见 [routes.py](src/agentos/routes.py)):`GET /skills` 与文件级 `GET/PUT/PATCH/DELETE /skills/{name}/files/{path}`(按 `agent=<id>`)。
 
 **删除 agent**:Aegra `DELETE /assistants/{id}` 只删记录、无生命周期钩子,故网关删除成功后应调
 `DELETE /agents/{id}`(agentos),删该 agent 的整个 backend root(`purge_agent`,返回 `{"purged": true}`)。
@@ -210,15 +215,15 @@ AGENT_WORKSPACE/<agent>/                       # 该 assistant 的 backend root(
 ### 本地验证(curl)
 
 ```bash
-uv run aegra serve   # http://127.0.0.1:2026(连 .env 的外部 pg/redis)
+docker compose up -d --build   # http://127.0.0.1:2026(或 Linux/WSL: uv run aegra serve)
 
 # 建 agent(连接放 config.configurable,必须显式分配)
-curl -X POST http://127.0.0.1:2026/assistants -H "X-User-Id: acme" -H "Content-Type: application/json" \
+curl -X POST http://127.0.0.1:2026/assistants -H "Content-Type: application/json" \
   -d '{"assistant_id":"a1","graph_id":"agentos","config":{"configurable":{"agent":"a1","model":"claude-sonnet-4-6","base_url":"https://your-gateway/v1","api_key":"sk-..."}}}'
 
-# 用户开会话并发消息(X-User-Id=用户):会话私有
-curl -X POST http://127.0.0.1:2026/threads -H "X-User-Id: alice" -d '{"thread_id":"alice-1","if_exists":"do_nothing"}'
-curl -N -X POST http://127.0.0.1:2026/threads/alice-1/runs/stream -H "X-User-Id: alice" -H "Content-Type: application/json" \
+# 开会话并发消息(noop:无需鉴权头)
+curl -X POST http://127.0.0.1:2026/threads -d '{"thread_id":"t1","if_exists":"do_nothing"}'
+curl -N -X POST http://127.0.0.1:2026/threads/t1/runs/stream -H "Content-Type: application/json" \
   -d '{"assistant_id":"a1","input":{"messages":[{"type":"human","content":"hello"}]}}'
 ```
 
@@ -235,7 +240,6 @@ curl -N -X POST http://127.0.0.1:2026/threads/alice-1/runs/stream -H "X-User-Id:
 | `AGENT_TOOL_CALL_LIMIT` | 空 | 单次运行工具调用上限(模型迭代上限是 per-agent `steps`) |
 | `AGENT_MODEL_MAX_RETRIES` | `2` | 模型调用最大重试 |
 | `AGENT_TOOL_MAX_RETRIES` | `2` | 工具调用最大重试 |
-| `AGENT_CONTEXT_EDIT_TRIGGER_TOKENS` | `100000` | 触发清理旧工具输出的 token 阈值 |
 
 ## 设计说明
 

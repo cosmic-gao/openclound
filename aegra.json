@@ -1,13 +1,10 @@
 {
+  "name": "agentos",
   "dependencies": ["./src"],
   "graphs": {
     "agentos": "./src/agentos/graph.py:graph"
   },
   "http": {
-    "app": "./src/agentos/http.py:app"
-  },
-  "auth": {
-    "path": "./src/agentos/auth.py:auth",
-    "disable_studio_auth": true
+    "app": "./src/agentos/routes.py:app"
   }
 }

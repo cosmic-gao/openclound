@@ -16,10 +16,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY pyproject.toml ./
 COPY uv.loc[k] ./
-RUN uv sync --no-dev --extra aegra --no-install-project --compile-bytecode  # aegra extra = aegra-cli
+RUN uv sync --no-dev --no-install-project --compile-bytecode
 COPY src/ ./src/
 COPY README.md ./
-RUN uv sync --no-dev --extra aegra --compile-bytecode
+RUN uv sync --no-dev --compile-bytecode
 
 FROM base AS final
 

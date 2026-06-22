@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from langchain.agents.middleware import AgentMiddleware, InterruptOnConfig
     from langchain_core.tools import BaseTool
 
-    from agentos.spec import ResolvedConfig
+    from agentos.config import ResolvedConfig
 
 AGENT_NAME = "openclound-agentos"
 
