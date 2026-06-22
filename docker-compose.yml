@@ -1,5 +1,6 @@
 # 启动:docker compose up -d --build
 # 停止:docker compose down
+# 端口全部跟随 .env:容器监听 = agentos 连接 = 主机映射(单一真相源)。
 
 services:
   postgres:
@@ -7,12 +8,13 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    command: ["-p", "${POSTGRES_PORT:-5432}"]
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:${POSTGRES_PORT:-5432}"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -p ${POSTGRES_PORT:-5432}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -20,12 +22,13 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    command: ["redis-server", "--port", "${REDIS_PORT:-6379}"]
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:${REDIS_PORT:-6379}"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -p ${REDIS_PORT:-6379} ping"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -34,6 +37,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
     image: agentos:latest
     restart: unless-stopped
     env_file:

@@ -45,6 +45,10 @@ dev = [
     "types-cachetools>=5.3",
 ]
 
+[tool.uv]
+# 缓存与 venv 跨文件系统时(如 Windows C 盘缓存 / E 盘项目)用拷贝,免 hardlink 回退警告
+link-mode = "copy"
+
 [tool.ruff]
 line-length = 88
 
